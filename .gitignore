@@ -1,0 +1,15 @@
+IMPLEMENTATION_PLAN.md
+
+# Gradle
+.gradle/
+build/
+gradle/
+
+# IDE
+.idea/
+*.iml
+out/
+
+# OS
+.DS_Store
+Thumbs.db

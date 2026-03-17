@@ -1,0 +1,56 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.editor'
+version = '1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // JSON 직렬화/역직렬화
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // CM (Communication Middleware) - libs/ 디렉토리에 jar 배치
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+
+    // 테스트
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+}
+
+// 서버 실행 태스크
+tasks.register('runServer', JavaExec) {
+    group = 'application'
+    description = 'Run the server application'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.editor.server.ServerMain'
+}
+
+// 클라이언트 실행 태스크
+tasks.register('runClient', JavaExec) {
+    group = 'application'
+    description = 'Run the client application'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.editor.client.ClientMain'
+}
+
+// 기본 메인 클래스 (application 플러그인용)
+application {
+    mainClass = 'com.editor.server.ServerMain'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
