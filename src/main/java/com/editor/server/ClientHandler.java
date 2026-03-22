@@ -3,6 +3,10 @@ package com.editor.server;
 import com.editor.common.Message;
 import com.editor.common.MessageType;
 import com.editor.common.NetworkUtil;
+import com.editor.common.payload.LoginRequest;
+import com.editor.common.payload.LoginResponse;
+import com.editor.common.payload.RegisterRequest;
+import com.editor.common.payload.RegisterResponse;
 import com.editor.common.payload.UserEvent;
 
 import java.io.IOException;
@@ -86,17 +90,64 @@ public class ClientHandler implements Runnable {
     // ── 인증 처리 ──
 
     private void handleLogin(Message msg) {
-        // TODO: Phase 2.5에서 계정 검증 로직 구현
-        System.out.println("[로그인 요청] from " + msg.getSender());
+        LoginRequest req = msg.getPayloadAs(LoginRequest.class);
+        AccountStore store = server.getAccountStore();
+
+        String error = store.login(req.getUserId(), req.getPassword());
+
+        Message response = new Message(MessageType.LOGIN_RESPONSE, "server");
+
+        if (error != null) {
+            // 로그인 실패
+            response.setPayloadFromObject(new LoginResponse(false, error, null));
+            networkUtil.send(response);
+            System.out.println("[로그인 실패] " + req.getUserId() + " — " + error);
+            return;
+        }
+
+        // 이미 접속 중인 사용자 체크
+        if (server.getOnlineUsers().contains(req.getUserId())) {
+            response.setPayloadFromObject(new LoginResponse(false, "이미 접속 중인 아이디입니다.", null));
+            networkUtil.send(response);
+            System.out.println("[로그인 실패] " + req.getUserId() + " — 중복 접속");
+            return;
+        }
+
+        // 로그인 성공
+        this.userId = req.getUserId();
+        server.addClient(userId, this);
+
+        response.setPayloadFromObject(new LoginResponse(true, "로그인 성공", server.getOnlineUsers()));
+        networkUtil.send(response);
+
+        // 전체에게 입장 알림
+        Message joinMsg = new Message(MessageType.USER_JOINED, "server");
+        joinMsg.setPayloadFromObject(new UserEvent(userId));
+        server.broadcast(joinMsg, userId);
+
+        System.out.println("[로그인 성공] " + userId);
     }
 
     private void handleRegister(Message msg) {
-        // TODO: Phase 2.4에서 회원가입 로직 구현
-        System.out.println("[회원가입 요청] from " + msg.getSender());
+        RegisterRequest req = msg.getPayloadAs(RegisterRequest.class);
+        AccountStore store = server.getAccountStore();
+
+        String error = store.register(req.getUserId(), req.getPassword());
+
+        Message response = new Message(MessageType.REGISTER_RESPONSE, "server");
+        if (error != null) {
+            response.setPayloadFromObject(new RegisterResponse(false, error));
+            System.out.println("[회원가입 실패] " + req.getUserId() + " — " + error);
+        } else {
+            response.setPayloadFromObject(new RegisterResponse(true, "회원가입 성공"));
+            System.out.println("[회원가입 성공] " + req.getUserId());
+        }
+        networkUtil.send(response);
     }
 
     private void handleLogout(Message msg) {
         System.out.println("[로그아웃] " + userId);
+        disconnect();
     }
 
     // ── 텍스트 편집 처리 ──
