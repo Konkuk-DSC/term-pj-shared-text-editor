@@ -1,10 +1,16 @@
 package com.editor.server;
 
+import com.editor.common.Message;
+import com.editor.common.MessageType;
 import com.editor.common.NetworkUtil;
+import com.editor.common.payload.UserEvent;
 
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -16,6 +22,9 @@ public class ServerMain {
     private final int port;
     private final ExecutorService threadPool;
     private ServerSocket serverSocket;
+
+    // 접속 중인 클라이언트 관리 (userId → ClientHandler)
+    private final ConcurrentHashMap<String, ClientHandler> connectedClients = new ConcurrentHashMap<>();
 
     public ServerMain(int port) {
         this.port = port;
@@ -48,11 +57,55 @@ public class ServerMain {
             if (serverSocket != null && !serverSocket.isClosed()) {
                 serverSocket.close();
             }
+            // 모든 클라이언트 연결 종료
+            for (ClientHandler handler : connectedClients.values()) {
+                handler.getNetworkUtil().close();
+            }
+            connectedClients.clear();
             threadPool.shutdown();
             System.out.println("서버 종료됨");
         } catch (IOException e) {
             System.err.println("서버 종료 중 오류: " + e.getMessage());
         }
+    }
+
+    /** 접속자 맵에 클라이언트 추가 */
+    public void addClient(String userId, ClientHandler handler) {
+        connectedClients.put(userId, handler);
+        System.out.println("[접속] " + userId + " (현재 " + connectedClients.size() + "명)");
+    }
+
+    /** 접속자 맵에서 클라이언트 제거 */
+    public void removeClient(String userId) {
+        connectedClients.remove(userId);
+        System.out.println("[해제] " + userId + " (현재 " + connectedClients.size() + "명)");
+    }
+
+    /** 현재 접속자 목록 반환 */
+    public List<String> getOnlineUsers() {
+        return new ArrayList<>(connectedClients.keySet());
+    }
+
+    /** 특정 사용자에게 메시지 전송 */
+    public void sendTo(String userId, Message message) {
+        ClientHandler handler = connectedClients.get(userId);
+        if (handler != null) {
+            handler.getNetworkUtil().send(message);
+        }
+    }
+
+    /** 전체 클라이언트에게 브로드캐스트 (송신자 제외) */
+    public void broadcast(Message message, String excludeUserId) {
+        for (var entry : connectedClients.entrySet()) {
+            if (!entry.getKey().equals(excludeUserId)) {
+                entry.getValue().getNetworkUtil().send(message);
+            }
+        }
+    }
+
+    /** 전체 클라이언트에게 브로드캐스트 */
+    public void broadcast(Message message) {
+        broadcast(message, null);
     }
 
     public static void main(String[] args) {
