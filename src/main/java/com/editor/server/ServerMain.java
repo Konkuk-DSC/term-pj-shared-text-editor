@@ -26,9 +26,16 @@ public class ServerMain {
     // 접속 중인 클라이언트 관리 (userId → ClientHandler)
     private final ConcurrentHashMap<String, ClientHandler> connectedClients = new ConcurrentHashMap<>();
 
+    // 사용자 계정 저장소
+    private final AccountStore accountStore = new AccountStore();
+
     public ServerMain(int port) {
         this.port = port;
         this.threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+    }
+
+    public AccountStore getAccountStore() {
+        return accountStore;
     }
 
     public void start() {
