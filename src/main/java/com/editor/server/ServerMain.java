@@ -93,20 +93,32 @@ public class ServerMain {
         return new ArrayList<>(connectedClients.keySet());
     }
 
-    /** 특정 사용자에게 메시지 전송 */
+    /** 특정 사용자에게 메시지 전송 (실패 시 해당 클라이언트 해제) */
     public void sendTo(String userId, Message message) {
         ClientHandler handler = connectedClients.get(userId);
         if (handler != null) {
-            handler.getNetworkUtil().send(message);
+            if (!handler.getNetworkUtil().send(message)) {
+                System.err.println("[전송 실패] " + userId + " — 연결 해제 처리");
+                handler.disconnectOnSendFailure();
+            }
         }
     }
 
-    /** 전체 클라이언트에게 브로드캐스트 (송신자 제외) */
+    /** 전체 클라이언트에게 브로드캐스트 (송신자 제외, 전송 실패 클라이언트 자동 해제) */
     public void broadcast(Message message, String excludeUserId) {
+        List<ClientHandler> failedHandlers = new ArrayList<>();
+
         for (var entry : connectedClients.entrySet()) {
             if (!entry.getKey().equals(excludeUserId)) {
-                entry.getValue().getNetworkUtil().send(message);
+                if (!entry.getValue().getNetworkUtil().send(message)) {
+                    failedHandlers.add(entry.getValue());
+                }
             }
+        }
+
+        for (ClientHandler handler : failedHandlers) {
+            System.err.println("[전송 실패] " + handler.getUserId() + " — 연결 해제 처리");
+            handler.disconnectOnSendFailure();
         }
     }
 

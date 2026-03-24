@@ -23,9 +23,11 @@ public class NetworkUtil {
 
     /**
      * Message 객체를 JSON으로 직렬화하여 전송한다.
+     * @return 전송 성공 시 true, 실패 시 false
      */
-    public synchronized void send(Message message) {
+    public synchronized boolean send(Message message) {
         writer.println(message.toJson());
+        return !writer.checkError();
     }
 
     /**

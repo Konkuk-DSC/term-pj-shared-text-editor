@@ -192,8 +192,16 @@ public class ClientHandler implements Runnable {
             Message leftMsg = new Message(MessageType.USER_LEFT, "server");
             leftMsg.setPayloadFromObject(new UserEvent(userId));
             server.broadcast(leftMsg);
+
+            userId = null;
         }
         networkUtil.close();
+    }
+
+    /** 전송 실패로 인한 강제 연결 해제 (broadcast/sendTo에서 호출) */
+    public void disconnectOnSendFailure() {
+        System.out.println("[강제 해제] " + userId + " — 전송 실패로 연결 종료");
+        disconnect();
     }
 
     public NetworkUtil getNetworkUtil() {
