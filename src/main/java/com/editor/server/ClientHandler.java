@@ -10,6 +10,7 @@ import com.editor.common.payload.RegisterResponse;
 import com.editor.common.payload.UserEvent;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 개별 클라이언트 소켓을 담당하는 핸들러.
@@ -19,7 +20,8 @@ public class ClientHandler implements Runnable {
 
     private final NetworkUtil networkUtil;
     private final ServerMain server;
-    private String userId;
+    private volatile String userId;
+    private final AtomicBoolean disconnected = new AtomicBoolean(false);
 
     public ClientHandler(NetworkUtil networkUtil, ServerMain server) {
         this.networkUtil = networkUtil;
@@ -184,16 +186,27 @@ public class ClientHandler implements Runnable {
 
     // ── 접속 해제 ──
 
+    /**
+     * 접속 해제 처리. AtomicBoolean으로 중복 실행을 방지한다.
+     * - 핸들러 자신의 스레드(run finally)에서 호출될 수 있고
+     * - 다른 스레드(broadcast 전송 실패)에서도 호출될 수 있으므로
+     *   한 번만 실행되도록 보장한다.
+     */
     private void disconnect() {
-        if (userId != null) {
-            server.removeClient(userId);
+        if (!disconnected.compareAndSet(false, true)) {
+            return; // 이미 해제 처리됨
+        }
+
+        String uid = this.userId;
+        this.userId = null;
+
+        if (uid != null) {
+            server.removeClient(uid);
 
             // 전체에게 퇴장 알림
             Message leftMsg = new Message(MessageType.USER_LEFT, "server");
-            leftMsg.setPayloadFromObject(new UserEvent(userId));
+            leftMsg.setPayloadFromObject(new UserEvent(uid));
             server.broadcast(leftMsg);
-
-            userId = null;
         }
         networkUtil.close();
     }
