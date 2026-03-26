@@ -1,0 +1,89 @@
+package com.editor.client;
+
+import com.editor.common.NetworkUtil;
+
+import java.io.IOException;
+import java.net.Socket;
+import java.util.Scanner;
+
+public class ClientMain {
+
+    private static final String DEFAULT_HOST = "localhost";
+    private static final int DEFAULT_PORT = 9000;
+
+    private NetworkUtil networkUtil;
+    private volatile boolean running = false;
+
+    /**
+     * 서버에 연결한다.
+     * @param host 서버 IP/호스트명
+     * @param port 서버 포트
+     * @return 연결 성공 시 true
+     */
+    public boolean connect(String host, int port) {
+        try {
+            Socket socket = new Socket(host, port);
+            networkUtil = new NetworkUtil(socket);
+            running = true;
+            System.out.println("서버 연결 성공: " + host + ":" + port);
+            return true;
+        } catch (IOException e) {
+            System.err.println("서버 연결 실패: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 서버 연결을 종료한다.
+     */
+    public void disconnect() {
+        running = false;
+        if (networkUtil != null) {
+            networkUtil.close();
+            networkUtil = null;
+        }
+        System.out.println("서버 연결 종료");
+    }
+
+    public NetworkUtil getNetworkUtil() {
+        return networkUtil;
+    }
+
+    public boolean isRunning() {
+        return running;
+    }
+
+    public static void main(String[] args) {
+        System.out.println("=== Shared Text Editor Client ===");
+
+        String host = DEFAULT_HOST;
+        int port = DEFAULT_PORT;
+
+        // 커맨드라인 인자: host port
+        if (args.length >= 1) {
+            host = args[0];
+        }
+        if (args.length >= 2) {
+            try {
+                port = Integer.parseInt(args[1]);
+            } catch (NumberFormatException e) {
+                System.err.println("잘못된 포트 번호, 기본 포트 사용: " + DEFAULT_PORT);
+            }
+        }
+
+        ClientMain client = new ClientMain();
+
+        if (!client.connect(host, port)) {
+            System.err.println("서버에 연결할 수 없습니다. 프로그램을 종료합니다.");
+            return;
+        }
+
+        // Ctrl+C 종료 시 정리
+        Runtime.getRuntime().addShutdownHook(new Thread(client::disconnect));
+
+        // TODO: Phase 3.2 — 메시지 수신 스레드 시작
+        // TODO: Phase 3.3 — 로그인 UI 시작
+
+        System.out.println("서버에 연결되었습니다. (추후 UI 연동 예정)");
+    }
+}
