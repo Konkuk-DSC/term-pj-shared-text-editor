@@ -1,10 +1,10 @@
 package com.editor.client;
 
+import com.editor.common.Message;
 import com.editor.common.NetworkUtil;
 
 import java.io.IOException;
 import java.net.Socket;
-import java.util.Scanner;
 
 public class ClientMain {
 
@@ -12,6 +12,8 @@ public class ClientMain {
     private static final int DEFAULT_PORT = 9000;
 
     private NetworkUtil networkUtil;
+    private MessageReceiver messageReceiver;
+    private Thread receiverThread;
     private volatile boolean running = false;
 
     /**
@@ -34,10 +36,33 @@ public class ClientMain {
     }
 
     /**
+     * 메시지 수신 스레드를 시작한다.
+     * @param listener 수신 메시지를 처리할 콜백
+     */
+    public void startReceiver(MessageListener listener) {
+        messageReceiver = new MessageReceiver(networkUtil, listener);
+        receiverThread = new Thread(messageReceiver, "msg-receiver");
+        receiverThread.setDaemon(true);
+        receiverThread.start();
+    }
+
+    /**
+     * 서버에 메시지를 전송한다.
+     * @return 전송 성공 시 true
+     */
+    public boolean send(Message msg) {
+        if (networkUtil == null) return false;
+        return networkUtil.send(msg);
+    }
+
+    /**
      * 서버 연결을 종료한다.
      */
     public void disconnect() {
         running = false;
+        if (messageReceiver != null) {
+            messageReceiver.stop();
+        }
         if (networkUtil != null) {
             networkUtil.close();
             networkUtil = null;
@@ -81,7 +106,9 @@ public class ClientMain {
         // Ctrl+C 종료 시 정리
         Runtime.getRuntime().addShutdownHook(new Thread(client::disconnect));
 
-        // TODO: Phase 3.2 — 메시지 수신 스레드 시작
+        // Phase 3.2 — 메시지 수신 스레드 시작
+        client.startReceiver(new DefaultMessageListener());
+
         // TODO: Phase 3.3 — 로그인 UI 시작
 
         System.out.println("서버에 연결되었습니다. (추후 UI 연동 예정)");
