@@ -6,10 +6,16 @@ import com.editor.common.payload.RegisterResponse;
 import com.editor.common.payload.UserEvent;
 
 /**
- * 콘솔 출력용 기본 MessageListener 구현.
- * Phase 3.3에서 UI 리스너로 교체된다.
+ * 기본 MessageListener 구현.
+ * 콘솔 출력 + LoginFrame UI 위임.
  */
 public class DefaultMessageListener implements MessageListener {
+
+    private LoginFrame loginFrame;
+
+    public void setLoginFrame(LoginFrame loginFrame) {
+        this.loginFrame = loginFrame;
+    }
 
     @Override
     public void onLoginResponse(Message msg) {
@@ -20,12 +26,18 @@ public class DefaultMessageListener implements MessageListener {
         } else {
             System.out.println("[로그인 실패] " + resp.getMessage());
         }
+        if (loginFrame != null) {
+            loginFrame.handleLoginResponse(msg);
+        }
     }
 
     @Override
     public void onRegisterResponse(Message msg) {
         RegisterResponse resp = msg.getPayloadAs(RegisterResponse.class);
         System.out.println("[회원가입] " + resp.getMessage());
+        if (loginFrame != null) {
+            loginFrame.handleRegisterResponse(msg);
+        }
     }
 
     @Override
@@ -78,5 +90,8 @@ public class DefaultMessageListener implements MessageListener {
     @Override
     public void onDisconnected() {
         System.out.println("[연결 끊김] 서버와의 연결이 종료되었습니다.");
+        if (loginFrame != null) {
+            loginFrame.handleDisconnected();
+        }
     }
 }

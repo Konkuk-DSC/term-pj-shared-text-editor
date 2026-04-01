@@ -99,18 +99,23 @@ public class ClientMain {
         ClientMain client = new ClientMain();
 
         if (!client.connect(host, port)) {
-            System.err.println("서버에 연결할 수 없습니다. 프로그램을 종료합니다.");
+            javax.swing.JOptionPane.showMessageDialog(null,
+                    "Cannot connect to server.\n(" + host + ":" + port + ")",
+                    "Connection Failed", javax.swing.JOptionPane.ERROR_MESSAGE);
             return;
         }
 
         // Ctrl+C 종료 시 정리
         Runtime.getRuntime().addShutdownHook(new Thread(client::disconnect));
 
-        // Phase 3.2 — 메시지 수신 스레드 시작
-        client.startReceiver(new DefaultMessageListener());
+        // Phase 3.3 — 로그인 UI 시작
+        LoginFrame loginFrame = new LoginFrame(client);
 
-        // TODO: Phase 3.3 — 로그인 UI 시작
+        // 메시지 수신 스레드 시작 — LoginFrame에 응답 위임
+        DefaultMessageListener listener = new DefaultMessageListener();
+        listener.setLoginFrame(loginFrame);
+        client.startReceiver(listener);
 
-        System.out.println("서버에 연결되었습니다. (추후 UI 연동 예정)");
+        javax.swing.SwingUtilities.invokeLater(() -> loginFrame.setVisible(true));
     }
 }
