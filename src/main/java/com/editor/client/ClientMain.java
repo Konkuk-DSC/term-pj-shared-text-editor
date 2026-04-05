@@ -27,10 +27,10 @@ public class ClientMain {
             Socket socket = new Socket(host, port);
             networkUtil = new NetworkUtil(socket);
             running = true;
-            System.out.println("서버 연결 성공: " + host + ":" + port);
+            System.out.println("Connected to server: " + host + ":" + port);
             return true;
         } catch (IOException e) {
-            System.err.println("서버 연결 실패: " + e.getMessage());
+            System.err.println("Failed to connect: " + e.getMessage());
             return false;
         }
     }
@@ -67,7 +67,7 @@ public class ClientMain {
             networkUtil.close();
             networkUtil = null;
         }
-        System.out.println("서버 연결 종료");
+        System.out.println("Disconnected from server.");
     }
 
     public NetworkUtil getNetworkUtil() {
@@ -92,7 +92,7 @@ public class ClientMain {
             try {
                 port = Integer.parseInt(args[1]);
             } catch (NumberFormatException e) {
-                System.err.println("잘못된 포트 번호, 기본 포트 사용: " + DEFAULT_PORT);
+                System.err.println("Invalid port number, using default: " + DEFAULT_PORT);
             }
         }
 

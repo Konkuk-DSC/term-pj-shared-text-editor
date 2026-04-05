@@ -36,7 +36,7 @@ public class ClientHandler implements Runnable {
                 handleMessage(msg);
             }
         } catch (IOException e) {
-            System.err.println("클라이언트 통신 오류: " + e.getMessage());
+            System.err.println("[ERROR] Client communication error: " + e.getMessage());
         } finally {
             disconnect();
         }
@@ -84,7 +84,7 @@ public class ClientHandler implements Runnable {
                 break;
 
             default:
-                System.out.println("알 수 없는 메시지: [" + msg.getType() + "] from " + msg.getSender());
+                System.out.println("[WARN] Unknown message: [" + msg.getType() + "] from " + msg.getSender());
                 break;
         }
     }
@@ -103,15 +103,15 @@ public class ClientHandler implements Runnable {
             // 로그인 실패
             response.setPayloadFromObject(new LoginResponse(false, error, null));
             networkUtil.send(response);
-            System.out.println("[로그인 실패] " + req.getUserId() + " — " + error);
+            System.out.println("[LOGIN FAIL] " + req.getUserId() + " — " + error);
             return;
         }
 
         // 이미 접속 중인 사용자 체크
         if (server.getOnlineUsers().contains(req.getUserId())) {
-            response.setPayloadFromObject(new LoginResponse(false, "이미 접속 중인 아이디입니다.", null));
+            response.setPayloadFromObject(new LoginResponse(false, "Already logged in.", null));
             networkUtil.send(response);
-            System.out.println("[로그인 실패] " + req.getUserId() + " — 중복 접속");
+            System.out.println("[LOGIN FAIL] " + req.getUserId() + " — duplicate login");
             return;
         }
 
@@ -119,7 +119,7 @@ public class ClientHandler implements Runnable {
         this.userId = req.getUserId();
         server.addClient(userId, this);
 
-        response.setPayloadFromObject(new LoginResponse(true, "로그인 성공", server.getOnlineUsers()));
+        response.setPayloadFromObject(new LoginResponse(true, "Login successful.", server.getOnlineUsers()));
         networkUtil.send(response);
 
         // 전체에게 입장 알림
@@ -127,7 +127,7 @@ public class ClientHandler implements Runnable {
         joinMsg.setPayloadFromObject(new UserEvent(userId));
         server.broadcast(joinMsg, userId);
 
-        System.out.println("[로그인 성공] " + userId);
+        System.out.println("[LOGIN OK] " + userId);
     }
 
     private void handleRegister(Message msg) {
@@ -139,16 +139,16 @@ public class ClientHandler implements Runnable {
         Message response = new Message(MessageType.REGISTER_RESPONSE, "server");
         if (error != null) {
             response.setPayloadFromObject(new RegisterResponse(false, error));
-            System.out.println("[회원가입 실패] " + req.getUserId() + " — " + error);
+            System.out.println("[REGISTER FAIL] " + req.getUserId() + " — " + error);
         } else {
-            response.setPayloadFromObject(new RegisterResponse(true, "회원가입 성공"));
-            System.out.println("[회원가입 성공] " + req.getUserId());
+            response.setPayloadFromObject(new RegisterResponse(true, "Registration successful."));
+            System.out.println("[REGISTER OK] " + req.getUserId());
         }
         networkUtil.send(response);
     }
 
     private void handleLogout(Message msg) {
-        System.out.println("[로그아웃] " + userId);
+        System.out.println("[LOGOUT] " + userId);
         disconnect();
     }
 
@@ -165,14 +165,14 @@ public class ClientHandler implements Runnable {
 
     private void handleSession(Message msg) {
         // TODO: Phase 5에서 구현
-        System.out.println("[세션] " + msg.getType() + " from " + userId);
+        System.out.println("[SESSION] " + msg.getType() + " from " + userId);
     }
 
     // ── 동시성 제어 처리 ──
 
     private void handleLock(Message msg) {
         // TODO: Phase 7에서 구현
-        System.out.println("[잠금] " + msg.getType() + " from " + userId);
+        System.out.println("[LOCK] " + msg.getType() + " from " + userId);
     }
 
     // ── 실시간 편집 과정 처리 ──
@@ -213,7 +213,7 @@ public class ClientHandler implements Runnable {
 
     /** 전송 실패로 인한 강제 연결 해제 (broadcast/sendTo에서 호출) */
     public void disconnectOnSendFailure() {
-        System.out.println("[강제 해제] " + userId + " — 전송 실패로 연결 종료");
+        System.out.println("[FORCE DISCONNECT] " + userId + " — send failure");
         disconnect();
     }
 

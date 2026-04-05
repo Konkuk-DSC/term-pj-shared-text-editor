@@ -17,14 +17,18 @@ public class DefaultMessageListener implements MessageListener {
         this.loginFrame = loginFrame;
     }
 
+    private MainFrame getMainFrame() {
+        return (loginFrame != null) ? loginFrame.getMainFrame() : null;
+    }
+
     @Override
     public void onLoginResponse(Message msg) {
         LoginResponse resp = msg.getPayloadAs(LoginResponse.class);
         if (resp.isSuccess()) {
-            System.out.println("[로그인 성공] " + resp.getMessage());
-            System.out.println("접속자: " + resp.getOnlineUsers());
+            System.out.println("[LOGIN OK] " + resp.getMessage());
+            System.out.println("Online users: " + resp.getOnlineUsers());
         } else {
-            System.out.println("[로그인 실패] " + resp.getMessage());
+            System.out.println("[LOGIN FAIL] " + resp.getMessage());
         }
         if (loginFrame != null) {
             loginFrame.handleLoginResponse(msg);
@@ -34,7 +38,7 @@ public class DefaultMessageListener implements MessageListener {
     @Override
     public void onRegisterResponse(Message msg) {
         RegisterResponse resp = msg.getPayloadAs(RegisterResponse.class);
-        System.out.println("[회원가입] " + resp.getMessage());
+        System.out.println("[REGISTER] " + resp.getMessage());
         if (loginFrame != null) {
             loginFrame.handleRegisterResponse(msg);
         }
@@ -43,33 +47,41 @@ public class DefaultMessageListener implements MessageListener {
     @Override
     public void onUserJoined(Message msg) {
         UserEvent event = msg.getPayloadAs(UserEvent.class);
-        System.out.println("[접속] " + event.getUserId() + " 님이 접속했습니다.");
+        System.out.println("[JOINED] " + event.getUserId());
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleUserJoined(msg);
+        }
     }
 
     @Override
     public void onUserLeft(Message msg) {
         UserEvent event = msg.getPayloadAs(UserEvent.class);
-        System.out.println("[퇴장] " + event.getUserId() + " 님이 나갔습니다.");
+        System.out.println("[LEFT] " + event.getUserId());
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleUserLeft(msg);
+        }
     }
 
     @Override
     public void onUserList(Message msg) {
-        System.out.println("[접속자 목록] " + msg.getPayload());
+        System.out.println("[USER LIST] " + msg.getPayload());
     }
 
     @Override
     public void onTextInsert(Message msg) {
-        System.out.println("[텍스트 삽입] from " + msg.getSender());
+        System.out.println("[TEXT INSERT] from " + msg.getSender());
     }
 
     @Override
     public void onTextDelete(Message msg) {
-        System.out.println("[텍스트 삭제] from " + msg.getSender());
+        System.out.println("[TEXT DELETE] from " + msg.getSender());
     }
 
     @Override
     public void onTextUpdate(Message msg) {
-        System.out.println("[텍스트 수정] from " + msg.getSender());
+        System.out.println("[TEXT UPDATE] from " + msg.getSender());
     }
 
     @Override
@@ -89,8 +101,11 @@ public class DefaultMessageListener implements MessageListener {
 
     @Override
     public void onDisconnected() {
-        System.out.println("[연결 끊김] 서버와의 연결이 종료되었습니다.");
-        if (loginFrame != null) {
+        System.out.println("[DISCONNECTED] Connection to server lost.");
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleDisconnected();
+        } else if (loginFrame != null) {
             loginFrame.handleDisconnected();
         }
     }

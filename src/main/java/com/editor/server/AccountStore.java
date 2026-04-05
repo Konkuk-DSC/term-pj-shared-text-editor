@@ -17,13 +17,13 @@ public class AccountStore {
      */
     public String register(String userId, String password) {
         if (userId == null || userId.isBlank()) {
-            return "아이디를 입력해주세요.";
+            return "Please enter an ID.";
         }
         if (password == null || password.isBlank()) {
-            return "비밀번호를 입력해주세요.";
+            return "Please enter a password.";
         }
         if (accounts.containsKey(userId)) {
-            return "이미 존재하는 아이디입니다.";
+            return "ID already exists.";
         }
         accounts.put(userId, password);
         return null; // 성공
@@ -35,13 +35,13 @@ public class AccountStore {
      */
     public String login(String userId, String password) {
         if (userId == null || userId.isBlank()) {
-            return "아이디를 입력해주세요.";
+            return "Please enter an ID.";
         }
         if (!accounts.containsKey(userId)) {
-            return "존재하지 않는 아이디입니다.";
+            return "ID does not exist.";
         }
         if (!accounts.get(userId).equals(password)) {
-            return "비밀번호가 일치하지 않습니다.";
+            return "Incorrect password.";
         }
         return null; // 성공
     }

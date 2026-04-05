@@ -41,12 +41,12 @@ public class ServerMain {
     public void start() {
         try {
             serverSocket = new ServerSocket(port);
-            System.out.println("서버 시작됨 — 포트: " + port);
-            System.out.println("클라이언트 접속 대기 중...");
+            System.out.println("Server started on port " + port);
+            System.out.println("Waiting for client connections...");
 
             while (!serverSocket.isClosed()) {
                 Socket clientSocket = serverSocket.accept();
-                System.out.println("클라이언트 접속: " + clientSocket.getRemoteSocketAddress());
+                System.out.println("Client connected: " + clientSocket.getRemoteSocketAddress());
 
                 NetworkUtil networkUtil = new NetworkUtil(clientSocket);
                 ClientHandler handler = new ClientHandler(networkUtil, this);
@@ -54,7 +54,7 @@ public class ServerMain {
             }
         } catch (IOException e) {
             if (serverSocket != null && !serverSocket.isClosed()) {
-                System.err.println("서버 오류: " + e.getMessage());
+                System.err.println("[ERROR] Server error: " + e.getMessage());
             }
         }
     }
@@ -70,22 +70,22 @@ public class ServerMain {
             }
             connectedClients.clear();
             threadPool.shutdown();
-            System.out.println("서버 종료됨");
+            System.out.println("Server stopped.");
         } catch (IOException e) {
-            System.err.println("서버 종료 중 오류: " + e.getMessage());
+            System.err.println("[ERROR] Error during shutdown: " + e.getMessage());
         }
     }
 
     /** 접속자 맵에 클라이언트 추가 */
     public void addClient(String userId, ClientHandler handler) {
         connectedClients.put(userId, handler);
-        System.out.println("[접속] " + userId + " (현재 " + connectedClients.size() + "명)");
+        System.out.println("[JOINED] " + userId + " (online: " + connectedClients.size() + ")");
     }
 
     /** 접속자 맵에서 클라이언트 제거 */
     public void removeClient(String userId) {
         connectedClients.remove(userId);
-        System.out.println("[해제] " + userId + " (현재 " + connectedClients.size() + "명)");
+        System.out.println("[LEFT] " + userId + " (online: " + connectedClients.size() + ")");
     }
 
     /** 현재 접속자 목록 반환 */
@@ -98,7 +98,7 @@ public class ServerMain {
         ClientHandler handler = connectedClients.get(userId);
         if (handler != null) {
             if (!handler.getNetworkUtil().send(message)) {
-                System.err.println("[전송 실패] " + userId + " — 연결 해제 처리");
+                System.err.println("[SEND FAIL] " + userId + " — disconnecting");
                 handler.disconnectOnSendFailure();
             }
         }
@@ -117,7 +117,7 @@ public class ServerMain {
         }
 
         for (ClientHandler handler : failedHandlers) {
-            System.err.println("[전송 실패] " + handler.getUserId() + " — 연결 해제 처리");
+            System.err.println("[SEND FAIL] " + handler.getUserId() + " — disconnecting");
             handler.disconnectOnSendFailure();
         }
     }
@@ -135,7 +135,7 @@ public class ServerMain {
             try {
                 port = Integer.parseInt(args[0]);
             } catch (NumberFormatException e) {
-                System.err.println("잘못된 포트 번호, 기본 포트 사용: " + DEFAULT_PORT);
+                System.err.println("Invalid port number, using default: " + DEFAULT_PORT);
             }
         }
 

@@ -25,6 +25,7 @@ public class LoginFrame extends JFrame {
     private JLabel statusLabel;
 
     private String loggedInUserId;
+    private MainFrame mainFrame;
 
     public LoginFrame(ClientMain client) {
         this.client = client;
@@ -139,11 +140,10 @@ public class LoginFrame extends JFrame {
         SwingUtilities.invokeLater(() -> {
             if (resp.isSuccess()) {
                 loggedInUserId = userIdField.getText().trim();
-                setStatus("Login successful!", false);
-                // TODO: Phase 3.4 — switch to main editor screen
-                JOptionPane.showMessageDialog(this,
-                        "Login successful!\nOnline users: " + resp.getOnlineUsers(),
-                        "Info", JOptionPane.INFORMATION_MESSAGE);
+                // 메인 화면으로 전환
+                mainFrame = new MainFrame(client, loggedInUserId, resp.getOnlineUsers());
+                mainFrame.setVisible(true);
+                dispose(); // LoginFrame 닫기
             } else {
                 setStatus(resp.getMessage(), true);
                 setButtonsEnabled(true);
@@ -184,5 +184,9 @@ public class LoginFrame extends JFrame {
 
     public String getLoggedInUserId() {
         return loggedInUserId;
+    }
+
+    public MainFrame getMainFrame() {
+        return mainFrame;
     }
 }

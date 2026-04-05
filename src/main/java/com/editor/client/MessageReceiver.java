@@ -29,7 +29,7 @@ public class MessageReceiver implements Runnable {
             }
         } catch (IOException e) {
             if (running) {
-                System.err.println("서버 메시지 수신 오류: " + e.getMessage());
+                System.err.println("[ERROR] Failed to receive message: " + e.getMessage());
             }
         } finally {
             if (running) {
@@ -83,7 +83,7 @@ public class MessageReceiver implements Runnable {
                 break;
 
             default:
-                System.out.println("[수신] 미처리 메시지: " + msg.getType());
+                System.out.println("[RECV] Unhandled message: " + msg.getType());
                 break;
         }
     }
