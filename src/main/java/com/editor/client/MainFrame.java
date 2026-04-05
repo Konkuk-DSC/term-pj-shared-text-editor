@@ -3,8 +3,12 @@ package com.editor.client;
 import com.editor.common.Message;
 import com.editor.common.payload.UserEvent;
 
+import com.editor.common.MessageType;
+
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.util.List;
 
 /**
@@ -28,7 +32,18 @@ public class MainFrame extends JFrame {
 
     private void initUI(List<String> onlineUsers) {
         setTitle("Shared Text Editor — " + userId);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                // LOGOUT message to server
+                Message logoutMsg = new Message(MessageType.LOGOUT, userId);
+                client.send(logoutMsg);
+                client.disconnect();
+                dispose();
+                System.exit(0);
+            }
+        });
         setSize(800, 600);
         setLayout(new BorderLayout());
 
