@@ -23,6 +23,7 @@ public class MainFrame extends JFrame {
     private DefaultListModel<String> userListModel;
     private JList<String> userList;
     private JLabel statusLabel;
+    private JTextArea editorArea;
 
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
         this.client = client;
@@ -71,14 +72,18 @@ public class MainFrame extends JFrame {
 
         add(userPanel, BorderLayout.EAST);
 
-        // ── 에디터 영역 (중앙) — Phase 4에서 JTextArea로 교체 ──
-        JPanel editorPlaceholder = new JPanel(new BorderLayout());
-        JLabel placeholderLabel = new JLabel("Editor will be here (Phase 4)", SwingConstants.CENTER);
-        placeholderLabel.setFont(new Font("SansSerif", Font.ITALIC, 14));
-        placeholderLabel.setForeground(Color.GRAY);
-        editorPlaceholder.add(placeholderLabel, BorderLayout.CENTER);
+        // ── 에디터 영역 (중앙) ──
+        editorArea = new JTextArea();
+        editorArea.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        editorArea.setLineWrap(true);
+        editorArea.setWrapStyleWord(true);
+        editorArea.setTabSize(4);
 
-        add(editorPlaceholder, BorderLayout.CENTER);
+        JScrollPane editorScrollPane = new JScrollPane(editorArea);
+        editorScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        editorScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+
+        add(editorScrollPane, BorderLayout.CENTER);
 
         // ── 상태바 (하단) ──
         statusLabel = new JLabel("  Connected as: " + userId);
@@ -128,6 +133,10 @@ public class MainFrame extends JFrame {
 
     public String getUserId() {
         return userId;
+    }
+
+    public JTextArea getEditorArea() {
+        return editorArea;
     }
 
     // ── 접속자 리스트 셀 렌더러 (자기 자신 강조) ──
