@@ -88,15 +88,19 @@ public class MainFrame extends JFrame {
             @Override
             public void insertUpdate(DocumentEvent e) {
                 if (isRemoteChange) return;
-                try {
-                    int offset = e.getOffset();
-                    String text = e.getDocument().getText(offset, e.getLength());
-                    Message msg = new Message(MessageType.TEXT_INSERT, userId);
-                    msg.setPayloadFromObject(new TextInsert(offset, text));
-                    client.send(msg);
-                } catch (BadLocationException ex) {
-                    ex.printStackTrace();
-                }
+                int offset = e.getOffset();
+                int length = e.getLength();
+                // Document lock 안에서 getText() 호출 시 데드락 가능 → invokeLater로 빼냄
+                SwingUtilities.invokeLater(() -> {
+                    try {
+                        String text = editorArea.getText(offset, length);
+                        Message msg = new Message(MessageType.TEXT_INSERT, userId);
+                        msg.setPayloadFromObject(new TextInsert(offset, text));
+                        client.send(msg);
+                    } catch (BadLocationException ex) {
+                        ex.printStackTrace();
+                    }
+                });
             }
 
             @Override
@@ -104,9 +108,11 @@ public class MainFrame extends JFrame {
                 if (isRemoteChange) return;
                 int offset = e.getOffset();
                 int length = e.getLength();
-                Message msg = new Message(MessageType.TEXT_DELETE, userId);
-                msg.setPayloadFromObject(new TextDelete(offset, length));
-                client.send(msg);
+                SwingUtilities.invokeLater(() -> {
+                    Message msg = new Message(MessageType.TEXT_DELETE, userId);
+                    msg.setPayloadFromObject(new TextDelete(offset, length));
+                    client.send(msg);
+                });
             }
 
             @Override
