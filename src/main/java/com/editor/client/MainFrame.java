@@ -1,11 +1,15 @@
 package com.editor.client;
 
 import com.editor.common.Message;
+import com.editor.common.MessageType;
+import com.editor.common.payload.TextDelete;
+import com.editor.common.payload.TextInsert;
 import com.editor.common.payload.UserEvent;
 
-import com.editor.common.MessageType;
-
 import javax.swing.*;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import javax.swing.text.BadLocationException;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -24,6 +28,7 @@ public class MainFrame extends JFrame {
     private JList<String> userList;
     private JLabel statusLabel;
     private JTextArea editorArea;
+    private volatile boolean isRemoteChange = false;
 
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
         this.client = client;
@@ -78,6 +83,37 @@ public class MainFrame extends JFrame {
         editorArea.setLineWrap(true);
         editorArea.setWrapStyleWord(true);
         editorArea.setTabSize(4);
+
+        editorArea.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                if (isRemoteChange) return;
+                try {
+                    int offset = e.getOffset();
+                    String text = e.getDocument().getText(offset, e.getLength());
+                    Message msg = new Message(MessageType.TEXT_INSERT, userId);
+                    msg.setPayloadFromObject(new TextInsert(offset, text));
+                    client.send(msg);
+                } catch (BadLocationException ex) {
+                    ex.printStackTrace();
+                }
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                if (isRemoteChange) return;
+                int offset = e.getOffset();
+                int length = e.getLength();
+                Message msg = new Message(MessageType.TEXT_DELETE, userId);
+                msg.setPayloadFromObject(new TextDelete(offset, length));
+                client.send(msg);
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                // 속성 변경 — 텍스트 편집과 무관, 무시
+            }
+        });
 
         JScrollPane editorScrollPane = new JScrollPane(editorArea);
         editorScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
@@ -137,6 +173,10 @@ public class MainFrame extends JFrame {
 
     public JTextArea getEditorArea() {
         return editorArea;
+    }
+
+    public void setRemoteChange(boolean remote) {
+        this.isRemoteChange = remote;
     }
 
     // ── 접속자 리스트 셀 렌더러 (자기 자신 강조) ──
