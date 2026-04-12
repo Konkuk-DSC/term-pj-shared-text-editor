@@ -29,6 +29,9 @@ public class ServerMain {
     // 사용자 계정 저장소
     private final AccountStore accountStore = new AccountStore();
 
+    // 서버 측 문서 버퍼 (현재 텍스트 상태 유지)
+    private final DocumentBuffer documentBuffer = new DocumentBuffer();
+
     public ServerMain(int port) {
         this.port = port;
         this.threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
@@ -36,6 +39,10 @@ public class ServerMain {
 
     public AccountStore getAccountStore() {
         return accountStore;
+    }
+
+    public DocumentBuffer getDocumentBuffer() {
+        return documentBuffer;
     }
 
     public void start() {

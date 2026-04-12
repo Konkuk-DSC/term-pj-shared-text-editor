@@ -7,6 +7,9 @@ import com.editor.common.payload.LoginRequest;
 import com.editor.common.payload.LoginResponse;
 import com.editor.common.payload.RegisterRequest;
 import com.editor.common.payload.RegisterResponse;
+import com.editor.common.payload.TextDelete;
+import com.editor.common.payload.TextInsert;
+import com.editor.common.payload.TextUpdate;
 import com.editor.common.payload.UserEvent;
 
 import java.io.IOException;
@@ -156,6 +159,48 @@ public class ClientHandler implements Runnable {
 
     private void handleTextEdit(Message msg) {
         if (userId == null) return; // 미인증 클라이언트 무시
+
+        // 서버 내부 텍스트 버퍼에 연산 적용
+        DocumentBuffer buffer = server.getDocumentBuffer();
+        boolean applied = false;
+
+        switch (msg.getType()) {
+            case TEXT_INSERT: {
+                TextInsert payload = msg.getPayloadAs(TextInsert.class);
+                applied = buffer.insert(payload.getOffset(), payload.getText());
+                System.out.println("[TEXT_INSERT] by " + userId
+                        + " offset=" + payload.getOffset()
+                        + " text=\"" + payload.getText() + "\""
+                        + " (bufferLen=" + buffer.length() + ")");
+                break;
+            }
+            case TEXT_DELETE: {
+                TextDelete payload = msg.getPayloadAs(TextDelete.class);
+                applied = buffer.delete(payload.getOffset(), payload.getLength());
+                System.out.println("[TEXT_DELETE] by " + userId
+                        + " offset=" + payload.getOffset()
+                        + " length=" + payload.getLength()
+                        + " (bufferLen=" + buffer.length() + ")");
+                break;
+            }
+            case TEXT_UPDATE: {
+                TextUpdate payload = msg.getPayloadAs(TextUpdate.class);
+                applied = buffer.update(payload.getOffset(), payload.getLength(), payload.getNewText());
+                System.out.println("[TEXT_UPDATE] by " + userId
+                        + " offset=" + payload.getOffset()
+                        + " length=" + payload.getLength()
+                        + " newText=\"" + payload.getNewText() + "\""
+                        + " (bufferLen=" + buffer.length() + ")");
+                break;
+            }
+            default:
+                break;
+        }
+
+        if (!applied) {
+            System.err.println("[TEXT EDIT REJECTED] " + msg.getType() + " from " + userId);
+            return;
+        }
 
         // 송신자 제외 전체에게 브로드캐스트
         server.broadcast(msg, userId);

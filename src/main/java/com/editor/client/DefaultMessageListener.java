@@ -72,16 +72,28 @@ public class DefaultMessageListener implements MessageListener {
     @Override
     public void onTextInsert(Message msg) {
         System.out.println("[TEXT INSERT] from " + msg.getSender());
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleTextInsert(msg);
+        }
     }
 
     @Override
     public void onTextDelete(Message msg) {
         System.out.println("[TEXT DELETE] from " + msg.getSender());
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleTextDelete(msg);
+        }
     }
 
     @Override
     public void onTextUpdate(Message msg) {
         System.out.println("[TEXT UPDATE] from " + msg.getSender());
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleTextUpdate(msg);
+        }
     }
 
     @Override

@@ -7,6 +7,7 @@ import com.editor.common.payload.LoginRequest;
 import com.editor.common.payload.LoginResponse;
 import com.editor.common.payload.RegisterRequest;
 import com.editor.common.payload.RegisterResponse;
+import com.editor.common.payload.TextInsert;
 import com.editor.common.payload.UserEvent;
 
 import org.junit.jupiter.api.*;
@@ -171,6 +172,7 @@ class DisconnectTest {
 
         // user6이 텍스트 편집 → 서버가 user7에게 브로드캐스트 시도 → 실패 → user7 자동 해제
         Message editMsg = new Message(MessageType.TEXT_INSERT, "user6");
+        editMsg.setPayloadFromObject(new TextInsert(0, "hello"));
         client6.send(editMsg);
         Thread.sleep(500);
 

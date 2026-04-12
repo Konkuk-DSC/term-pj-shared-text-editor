@@ -4,6 +4,7 @@ import com.editor.common.Message;
 import com.editor.common.MessageType;
 import com.editor.common.payload.TextDelete;
 import com.editor.common.payload.TextInsert;
+import com.editor.common.payload.TextUpdate;
 import com.editor.common.payload.UserEvent;
 
 import javax.swing.*;
@@ -157,6 +158,51 @@ public class MainFrame extends JFrame {
             String leftUser = event.getUserId();
             userListModel.removeElement(leftUser);
             setStatus(leftUser + " left.");
+        });
+    }
+
+    // ── 원격 텍스트 편집 수신 (Phase 4.7) ──
+
+    public void handleTextInsert(Message msg) {
+        TextInsert payload = msg.getPayloadAs(TextInsert.class);
+        SwingUtilities.invokeLater(() -> {
+            try {
+                isRemoteChange = true;
+                editorArea.getDocument().insertString(payload.getOffset(), payload.getText(), null);
+            } catch (BadLocationException e) {
+                System.err.println("[REMOTE INSERT] BadLocation: " + e.getMessage());
+            } finally {
+                isRemoteChange = false;
+            }
+        });
+    }
+
+    public void handleTextDelete(Message msg) {
+        TextDelete payload = msg.getPayloadAs(TextDelete.class);
+        SwingUtilities.invokeLater(() -> {
+            try {
+                isRemoteChange = true;
+                editorArea.getDocument().remove(payload.getOffset(), payload.getLength());
+            } catch (BadLocationException e) {
+                System.err.println("[REMOTE DELETE] BadLocation: " + e.getMessage());
+            } finally {
+                isRemoteChange = false;
+            }
+        });
+    }
+
+    public void handleTextUpdate(Message msg) {
+        TextUpdate payload = msg.getPayloadAs(TextUpdate.class);
+        SwingUtilities.invokeLater(() -> {
+            try {
+                isRemoteChange = true;
+                editorArea.getDocument().remove(payload.getOffset(), payload.getLength());
+                editorArea.getDocument().insertString(payload.getOffset(), payload.getNewText(), null);
+            } catch (BadLocationException e) {
+                System.err.println("[REMOTE UPDATE] BadLocation: " + e.getMessage());
+            } finally {
+                isRemoteChange = false;
+            }
         });
     }
 
