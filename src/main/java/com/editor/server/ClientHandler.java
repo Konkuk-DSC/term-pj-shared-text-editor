@@ -110,17 +110,15 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // 이미 접속 중인 사용자 체크
-        if (server.getOnlineUsers().contains(req.getUserId())) {
+        // 로그인 성공 — 원자적으로 중복 접속 체크 + 등록
+        this.userId = req.getUserId();
+        if (!server.addClient(userId, this)) {
+            this.userId = null;
             response.setPayloadFromObject(new LoginResponse(false, "Already logged in.", null));
             networkUtil.send(response);
             System.out.println("[LOGIN FAIL] " + req.getUserId() + " — duplicate login");
             return;
         }
-
-        // 로그인 성공
-        this.userId = req.getUserId();
-        server.addClient(userId, this);
 
         response.setPayloadFromObject(new LoginResponse(true, "Login successful.", server.getOnlineUsers()));
         networkUtil.send(response);
@@ -158,7 +156,8 @@ public class ClientHandler implements Runnable {
     // ── 텍스트 편집 처리 ──
 
     private void handleTextEdit(Message msg) {
-        if (userId == null) return; // 미인증 클라이언트 무시
+        String uid = this.userId; // 로컬 복사 — disconnect()와의 TOCTOU 방지
+        if (uid == null) return; // 미인증 클라이언트 무시
 
         // 서버 내부 텍스트 버퍼에 연산 적용
         DocumentBuffer buffer = server.getDocumentBuffer();
@@ -168,7 +167,7 @@ public class ClientHandler implements Runnable {
             case TEXT_INSERT: {
                 TextInsert payload = msg.getPayloadAs(TextInsert.class);
                 applied = buffer.insert(payload.getOffset(), payload.getText());
-                System.out.println("[TEXT_INSERT] by " + userId
+                System.out.println("[TEXT_INSERT] by " + uid
                         + " offset=" + payload.getOffset()
                         + " text=\"" + payload.getText() + "\""
                         + " (bufferLen=" + buffer.length() + ")");
@@ -177,7 +176,7 @@ public class ClientHandler implements Runnable {
             case TEXT_DELETE: {
                 TextDelete payload = msg.getPayloadAs(TextDelete.class);
                 applied = buffer.delete(payload.getOffset(), payload.getLength());
-                System.out.println("[TEXT_DELETE] by " + userId
+                System.out.println("[TEXT_DELETE] by " + uid
                         + " offset=" + payload.getOffset()
                         + " length=" + payload.getLength()
                         + " (bufferLen=" + buffer.length() + ")");
@@ -186,7 +185,7 @@ public class ClientHandler implements Runnable {
             case TEXT_UPDATE: {
                 TextUpdate payload = msg.getPayloadAs(TextUpdate.class);
                 applied = buffer.update(payload.getOffset(), payload.getLength(), payload.getNewText());
-                System.out.println("[TEXT_UPDATE] by " + userId
+                System.out.println("[TEXT_UPDATE] by " + uid
                         + " offset=" + payload.getOffset()
                         + " length=" + payload.getLength()
                         + " newText=\"" + payload.getNewText() + "\""
@@ -198,12 +197,12 @@ public class ClientHandler implements Runnable {
         }
 
         if (!applied) {
-            System.err.println("[TEXT EDIT REJECTED] " + msg.getType() + " from " + userId);
+            System.err.println("[TEXT EDIT REJECTED] " + msg.getType() + " from " + uid);
             return;
         }
 
         // 송신자 제외 전체에게 브로드캐스트
-        server.broadcast(msg, userId);
+        server.broadcast(msg, uid);
     }
 
     // ── 세션 관리 처리 ──
@@ -223,10 +222,11 @@ public class ClientHandler implements Runnable {
     // ── 실시간 편집 과정 처리 ──
 
     private void handleRealtime(Message msg) {
-        if (userId == null) return;
+        String uid = this.userId;
+        if (uid == null) return;
 
         // 송신자 제외 전체에게 중계
-        server.broadcast(msg, userId);
+        server.broadcast(msg, uid);
     }
 
     // ── 접속 해제 ──

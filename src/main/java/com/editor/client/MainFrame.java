@@ -91,16 +91,18 @@ public class MainFrame extends JFrame {
                 if (isRemoteChange) return;
                 int offset = e.getOffset();
                 int length = e.getLength();
-                // Document lock 안에서 getText() 호출 시 데드락 가능 → invokeLater로 빼냄
+                // Document lock 안에서 바로 텍스트 추출 (invokeLater 지연 중 offset 밀림 방지)
+                String text;
+                try {
+                    text = e.getDocument().getText(offset, length);
+                } catch (BadLocationException ex) {
+                    ex.printStackTrace();
+                    return;
+                }
                 SwingUtilities.invokeLater(() -> {
-                    try {
-                        String text = editorArea.getText(offset, length);
-                        Message msg = new Message(MessageType.TEXT_INSERT, userId);
-                        msg.setPayloadFromObject(new TextInsert(offset, text));
-                        client.send(msg);
-                    } catch (BadLocationException ex) {
-                        ex.printStackTrace();
-                    }
+                    Message msg = new Message(MessageType.TEXT_INSERT, userId);
+                    msg.setPayloadFromObject(new TextInsert(offset, text));
+                    client.send(msg);
                 });
             }
 

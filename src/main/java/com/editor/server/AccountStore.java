@@ -22,10 +22,9 @@ public class AccountStore {
         if (password == null || password.isBlank()) {
             return "Please enter a password.";
         }
-        if (accounts.containsKey(userId)) {
+        if (accounts.putIfAbsent(userId, password) != null) {
             return "ID already exists.";
         }
-        accounts.put(userId, password);
         return null; // 성공
     }
 
@@ -37,10 +36,11 @@ public class AccountStore {
         if (userId == null || userId.isBlank()) {
             return "Please enter an ID.";
         }
-        if (!accounts.containsKey(userId)) {
+        String stored = accounts.get(userId);
+        if (stored == null) {
             return "ID does not exist.";
         }
-        if (!accounts.get(userId).equals(password)) {
+        if (!stored.equals(password)) {
             return "Incorrect password.";
         }
         return null; // 성공

@@ -83,10 +83,13 @@ public class ServerMain {
         }
     }
 
-    /** 접속자 맵에 클라이언트 추가 */
-    public void addClient(String userId, ClientHandler handler) {
-        connectedClients.put(userId, handler);
+    /** 접속자 맵에 클라이언트 추가. 이미 존재하면 false 반환 (원자적 중복 체크) */
+    public boolean addClient(String userId, ClientHandler handler) {
+        if (connectedClients.putIfAbsent(userId, handler) != null) {
+            return false;
+        }
         System.out.println("[JOINED] " + userId + " (online: " + connectedClients.size() + ")");
+        return true;
     }
 
     /** 접속자 맵에서 클라이언트 제거 */
