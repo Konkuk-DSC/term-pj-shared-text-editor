@@ -137,18 +137,25 @@ public class LoginFrame extends JFrame {
 
     public void handleLoginResponse(Message msg) {
         LoginResponse resp = msg.getPayloadAs(LoginResponse.class);
-        SwingUtilities.invokeLater(() -> {
-            if (resp.isSuccess()) {
-                loggedInUserId = userIdField.getText().trim();
-                // 메인 화면으로 전환
-                mainFrame = new MainFrame(client, loggedInUserId, resp.getOnlineUsers(), resp.getDocumentContent());
-                mainFrame.setVisible(true);
-                dispose(); // LoginFrame 닫기
-            } else {
+        if (resp.isSuccess()) {
+            // 수신 스레드를 블록하여 MainFrame 등록이 끝난 후에야 다음 메시지(예: 다른 사용자의 INSERT)를
+            // 처리하도록 보장한다. 그렇지 않으면 INSERT가 mainFrame == null 상태에서 도착해 drop될 수 있다.
+            try {
+                SwingUtilities.invokeAndWait(() -> {
+                    loggedInUserId = userIdField.getText().trim();
+                    mainFrame = new MainFrame(client, loggedInUserId, resp.getOnlineUsers(), resp.getDocumentContent());
+                    mainFrame.setVisible(true);
+                    dispose();
+                });
+            } catch (java.lang.reflect.InvocationTargetException | InterruptedException e) {
+                e.printStackTrace();
+            }
+        } else {
+            SwingUtilities.invokeLater(() -> {
                 setStatus(resp.getMessage(), true);
                 setButtonsEnabled(true);
-            }
-        });
+            });
+        }
     }
 
     public void handleRegisterResponse(Message msg) {

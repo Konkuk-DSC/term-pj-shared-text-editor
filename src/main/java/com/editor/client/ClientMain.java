@@ -5,6 +5,7 @@ import com.editor.common.NetworkUtil;
 
 import java.io.IOException;
 import java.net.Socket;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ClientMain {
 
@@ -15,6 +16,7 @@ public class ClientMain {
     private MessageReceiver messageReceiver;
     private Thread receiverThread;
     private volatile boolean running = false;
+    private final AtomicBoolean disconnected = new AtomicBoolean(false);
 
     /**
      * 서버에 연결한다.
@@ -57,8 +59,12 @@ public class ClientMain {
 
     /**
      * 서버 연결을 종료한다.
+     * WindowListener와 shutdownHook이 동시에 호출해도 한 번만 실행되도록 보장한다.
      */
     public void disconnect() {
+        if (!disconnected.compareAndSet(false, true)) {
+            return;
+        }
         running = false;
         if (messageReceiver != null) {
             messageReceiver.stop();

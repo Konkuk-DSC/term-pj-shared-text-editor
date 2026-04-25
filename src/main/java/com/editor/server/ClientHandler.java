@@ -34,12 +34,27 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         try {
-            Message msg;
-            while ((msg = networkUtil.receive()) != null) {
-                handleMessage(msg);
+            while (true) {
+                Message msg;
+                try {
+                    msg = networkUtil.receive();
+                } catch (IOException e) {
+                    System.err.println("[ERROR] Client communication error: " + e.getMessage());
+                    break;
+                } catch (RuntimeException e) {
+                    // 잘못된 JSON 등 — 해당 메시지만 버리고 계속 수신
+                    System.err.println("[WARN] Malformed message ignored: " + e.getMessage());
+                    continue;
+                }
+                if (msg == null) break;
+                try {
+                    handleMessage(msg);
+                } catch (RuntimeException e) {
+                    // 핸들러 내부 예외 — 해당 메시지만 실패 처리, 핸들러 스레드는 유지
+                    System.err.println("[ERROR] Handler error for " + msg.getType() + ": " + e.getMessage());
+                    e.printStackTrace();
+                }
             }
-        } catch (IOException e) {
-            System.err.println("[ERROR] Client communication error: " + e.getMessage());
         } finally {
             disconnect();
         }
@@ -95,6 +110,14 @@ public class ClientHandler implements Runnable {
     // ── 인증 처리 ──
 
     private void handleLogin(Message msg) {
+        // 이미 인증된 클라이언트가 LOGIN을 또 보내면 거부 (자기 자신을 ghost로 만드는 race 방지)
+        if (this.userId != null) {
+            Message reject = new Message(MessageType.LOGIN_RESPONSE, "server");
+            reject.setPayloadFromObject(new LoginResponse(false, "Already authenticated.", null));
+            networkUtil.send(reject);
+            return;
+        }
+
         LoginRequest req = msg.getPayloadAs(LoginRequest.class);
         AccountStore store = server.getAccountStore();
 
