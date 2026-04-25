@@ -141,7 +141,7 @@ public class LoginFrame extends JFrame {
             if (resp.isSuccess()) {
                 loggedInUserId = userIdField.getText().trim();
                 // 메인 화면으로 전환
-                mainFrame = new MainFrame(client, loggedInUserId, resp.getOnlineUsers());
+                mainFrame = new MainFrame(client, loggedInUserId, resp.getOnlineUsers(), resp.getDocumentContent());
                 mainFrame.setVisible(true);
                 dispose(); // LoginFrame 닫기
             } else {

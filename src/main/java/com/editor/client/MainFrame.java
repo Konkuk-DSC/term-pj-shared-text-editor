@@ -32,12 +32,16 @@ public class MainFrame extends JFrame {
     private volatile boolean isRemoteChange = false;
 
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
-        this.client = client;
-        this.userId = userId;
-        initUI(onlineUsers);
+        this(client, userId, onlineUsers, null);
     }
 
-    private void initUI(List<String> onlineUsers) {
+    public MainFrame(ClientMain client, String userId, List<String> onlineUsers, String initialContent) {
+        this.client = client;
+        this.userId = userId;
+        initUI(onlineUsers, initialContent);
+    }
+
+    private void initUI(List<String> onlineUsers, String initialContent) {
         setTitle("Shared Text Editor — " + userId);
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -84,6 +88,12 @@ public class MainFrame extends JFrame {
         editorArea.setLineWrap(true);
         editorArea.setWrapStyleWord(true);
         editorArea.setTabSize(4);
+
+        // 초기 문서 내용 설정 (Late-comer 동기화) — DocumentListener 등록 전에 수행
+        if (initialContent != null && !initialContent.isEmpty()) {
+            editorArea.setText(initialContent);
+            editorArea.setCaretPosition(0);
+        }
 
         editorArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
