@@ -120,10 +120,17 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        response.setPayloadFromObject(new LoginResponse(true, "Login successful.", server.getOnlineUsers()));
-        networkUtil.send(response);
+        // 로그인 성공 시 현재 문서 전체 내용 + LoginResponse 전송을 buffer lock 안에서 원자적으로 수행.
+        // handleTextEdit이 같은 lock을 잡고 buffer 적용 + broadcast 하므로,
+        // LoginResponse 전송 도중 다른 클라이언트의 INSERT 메시지가 이 클라이언트에 먼저 도착하는 race를 차단한다.
+        DocumentBuffer buffer = server.getDocumentBuffer();
+        synchronized (buffer) {
+            String currentDoc = buffer.getText();
+            response.setPayloadFromObject(new LoginResponse(true, "Login successful.", server.getOnlineUsers(), currentDoc));
+            networkUtil.send(response);
+        }
 
-        // 전체에게 입장 알림
+        // 전체에게 입장 알림 (buffer와 무관하므로 lock 밖에서 broadcast)
         Message joinMsg = new Message(MessageType.USER_JOINED, "server");
         joinMsg.setPayloadFromObject(new UserEvent(userId));
         server.broadcast(joinMsg, userId);
@@ -159,50 +166,52 @@ public class ClientHandler implements Runnable {
         String uid = this.userId; // 로컬 복사 — disconnect()와의 TOCTOU 방지
         if (uid == null) return; // 미인증 클라이언트 무시
 
-        // 서버 내부 텍스트 버퍼에 연산 적용
+        // buffer 적용 + broadcast를 같은 lock 안에서 원자적으로 수행.
+        // handleLogin의 LoginResponse 전송과 직렬화되어, 신규 접속자가 stale snapshot을 받는 race를 차단한다.
         DocumentBuffer buffer = server.getDocumentBuffer();
-        boolean applied = false;
+        synchronized (buffer) {
+            boolean applied = false;
+            switch (msg.getType()) {
+                case TEXT_INSERT: {
+                    TextInsert payload = msg.getPayloadAs(TextInsert.class);
+                    applied = buffer.insert(payload.getOffset(), payload.getText());
+                    System.out.println("[TEXT_INSERT] by " + uid
+                            + " offset=" + payload.getOffset()
+                            + " text=\"" + payload.getText() + "\""
+                            + " (bufferLen=" + buffer.length() + ")");
+                    break;
+                }
+                case TEXT_DELETE: {
+                    TextDelete payload = msg.getPayloadAs(TextDelete.class);
+                    applied = buffer.delete(payload.getOffset(), payload.getLength());
+                    System.out.println("[TEXT_DELETE] by " + uid
+                            + " offset=" + payload.getOffset()
+                            + " length=" + payload.getLength()
+                            + " (bufferLen=" + buffer.length() + ")");
+                    break;
+                }
+                case TEXT_UPDATE: {
+                    TextUpdate payload = msg.getPayloadAs(TextUpdate.class);
+                    applied = buffer.update(payload.getOffset(), payload.getLength(), payload.getNewText());
+                    System.out.println("[TEXT_UPDATE] by " + uid
+                            + " offset=" + payload.getOffset()
+                            + " length=" + payload.getLength()
+                            + " newText=\"" + payload.getNewText() + "\""
+                            + " (bufferLen=" + buffer.length() + ")");
+                    break;
+                }
+                default:
+                    break;
+            }
 
-        switch (msg.getType()) {
-            case TEXT_INSERT: {
-                TextInsert payload = msg.getPayloadAs(TextInsert.class);
-                applied = buffer.insert(payload.getOffset(), payload.getText());
-                System.out.println("[TEXT_INSERT] by " + uid
-                        + " offset=" + payload.getOffset()
-                        + " text=\"" + payload.getText() + "\""
-                        + " (bufferLen=" + buffer.length() + ")");
-                break;
+            if (!applied) {
+                System.err.println("[TEXT EDIT REJECTED] " + msg.getType() + " from " + uid);
+                return;
             }
-            case TEXT_DELETE: {
-                TextDelete payload = msg.getPayloadAs(TextDelete.class);
-                applied = buffer.delete(payload.getOffset(), payload.getLength());
-                System.out.println("[TEXT_DELETE] by " + uid
-                        + " offset=" + payload.getOffset()
-                        + " length=" + payload.getLength()
-                        + " (bufferLen=" + buffer.length() + ")");
-                break;
-            }
-            case TEXT_UPDATE: {
-                TextUpdate payload = msg.getPayloadAs(TextUpdate.class);
-                applied = buffer.update(payload.getOffset(), payload.getLength(), payload.getNewText());
-                System.out.println("[TEXT_UPDATE] by " + uid
-                        + " offset=" + payload.getOffset()
-                        + " length=" + payload.getLength()
-                        + " newText=\"" + payload.getNewText() + "\""
-                        + " (bufferLen=" + buffer.length() + ")");
-                break;
-            }
-            default:
-                break;
+
+            // 송신자 제외 전체에게 브로드캐스트 (lock 안에서 수행하여 LoginResponse와 순서 보장)
+            server.broadcast(msg, uid);
         }
-
-        if (!applied) {
-            System.err.println("[TEXT EDIT REJECTED] " + msg.getType() + " from " + uid);
-            return;
-        }
-
-        // 송신자 제외 전체에게 브로드캐스트
-        server.broadcast(msg, uid);
     }
 
     // ── 세션 관리 처리 ──
