@@ -32,6 +32,9 @@ public class ServerMain {
     // 서버 측 문서 버퍼 (현재 텍스트 상태 유지)
     private final DocumentBuffer documentBuffer = new DocumentBuffer();
 
+    // 세션 목록 관리소 (Phase 5)
+    private final SessionStore sessionStore = new SessionStore();
+
     public ServerMain(int port) {
         this.port = port;
         this.threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
@@ -43,6 +46,10 @@ public class ServerMain {
 
     public DocumentBuffer getDocumentBuffer() {
         return documentBuffer;
+    }
+
+    public SessionStore getSessionStore() {
+        return sessionStore;
     }
 
     public void start() {
