@@ -7,12 +7,18 @@ import com.editor.common.payload.LoginRequest;
 import com.editor.common.payload.LoginResponse;
 import com.editor.common.payload.RegisterRequest;
 import com.editor.common.payload.RegisterResponse;
+import com.editor.common.payload.SessionCreateRequest;
+import com.editor.common.payload.SessionCreateResponse;
+import com.editor.common.payload.SessionInfo;
+import com.editor.common.payload.SessionListResponse;
 import com.editor.common.payload.TextDelete;
 import com.editor.common.payload.TextInsert;
 import com.editor.common.payload.TextUpdate;
 import com.editor.common.payload.UserEvent;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -240,8 +246,66 @@ public class ClientHandler implements Runnable {
     // ── 세션 관리 처리 ──
 
     private void handleSession(Message msg) {
-        // TODO: Phase 5에서 구현
-        System.out.println("[SESSION] " + msg.getType() + " from " + userId);
+        switch (msg.getType()) {
+            case SESSION_CREATE:
+                handleSessionCreate(msg);
+                break;
+            case SESSION_LIST_REQUEST:
+            case SESSION_JOIN:
+                // TODO: 5.3 / 5.4에서 구현
+                System.out.println("[SESSION TODO] " + msg.getType() + " from " + userId);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void handleSessionCreate(Message msg) {
+        String uid = this.userId;
+        if (uid == null) {
+            // 미인증 클라이언트는 세션을 만들 수 없다
+            Message resp = new Message(MessageType.SESSION_CREATE_RESPONSE, "server");
+            resp.setPayloadFromObject(new SessionCreateResponse(false, "Not authenticated.", null, null));
+            networkUtil.send(resp);
+            return;
+        }
+
+        SessionCreateRequest req = msg.getPayloadAs(SessionCreateRequest.class);
+        String name = req == null ? null : req.getSessionName();
+
+        Session created = server.getSessionStore().create(name);
+
+        Message resp = new Message(MessageType.SESSION_CREATE_RESPONSE, "server");
+        if (created == null) {
+            resp.setPayloadFromObject(new SessionCreateResponse(false, "Session name is empty.", null, null));
+            networkUtil.send(resp);
+            System.out.println("[SESSION_CREATE FAIL] by " + uid + " — empty name");
+            return;
+        }
+
+        resp.setPayloadFromObject(new SessionCreateResponse(
+                true, "Session created.", created.getSessionId(), created.getSessionName()));
+        networkUtil.send(resp);
+        System.out.println("[SESSION_CREATE OK] " + created.getSessionName()
+                + " (" + created.getSessionId() + ") by " + uid);
+
+        // 전체 클라이언트에게 갱신된 세션 목록 push
+        Message listMsg = new Message(MessageType.SESSION_LIST_RESPONSE, "server");
+        listMsg.setPayloadFromObject(new SessionListResponse(buildSessionInfoList()));
+        server.broadcast(listMsg);
+    }
+
+    private List<SessionInfo> buildSessionInfoList() {
+        List<Session> all = server.getSessionStore().list();
+        List<SessionInfo> infos = new ArrayList<>(all.size());
+        for (Session s : all) {
+            infos.add(new SessionInfo(
+                    s.getSessionId(),
+                    s.getSessionName(),
+                    s.getParticipantCount(),
+                    s.getLastModifiedAt()));
+        }
+        return infos;
     }
 
     // ── 동시성 제어 처리 ──
