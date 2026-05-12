@@ -28,6 +28,8 @@ public interface MessageListener {
 
     void onSessionListResponse(Message msg);
 
+    void onSessionJoinResponse(Message msg);
+
     void onRealtimeEdit(Message msg);
 
     void onCursorMove(Message msg);

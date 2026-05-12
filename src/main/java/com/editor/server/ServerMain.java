@@ -144,6 +144,29 @@ public class ServerMain {
         broadcast(message, null);
     }
 
+    /**
+     * 특정 세션의 참여자에게만 메시지 브로드캐스트 (송신자 제외, 전송 실패 클라이언트 자동 해제).
+     * Phase 5.4 — 세션별 텍스트 편집 broadcast 용도.
+     */
+    public void broadcastToSession(Session session, Message message, String excludeUserId) {
+        if (session == null) return;
+        List<ClientHandler> failedHandlers = new ArrayList<>();
+
+        for (String uid : session.getParticipants()) {
+            if (uid.equals(excludeUserId)) continue;
+            ClientHandler handler = connectedClients.get(uid);
+            if (handler == null) continue;
+            if (!handler.getNetworkUtil().send(message)) {
+                failedHandlers.add(handler);
+            }
+        }
+
+        for (ClientHandler handler : failedHandlers) {
+            System.err.println("[SEND FAIL] " + handler.getUserId() + " — disconnecting");
+            handler.disconnectOnSendFailure();
+        }
+    }
+
     public static void main(String[] args) {
         System.out.println("=== Shared Text Editor Server ===");
 

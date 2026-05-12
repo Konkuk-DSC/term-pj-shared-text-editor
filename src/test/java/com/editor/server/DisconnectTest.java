@@ -7,6 +7,10 @@ import com.editor.common.payload.LoginRequest;
 import com.editor.common.payload.LoginResponse;
 import com.editor.common.payload.RegisterRequest;
 import com.editor.common.payload.RegisterResponse;
+import com.editor.common.payload.SessionCreateRequest;
+import com.editor.common.payload.SessionCreateResponse;
+import com.editor.common.payload.SessionJoinRequest;
+import com.editor.common.payload.SessionJoinResponse;
 import com.editor.common.payload.TextInsert;
 import com.editor.common.payload.UserEvent;
 
@@ -163,14 +167,48 @@ class DisconnectTest {
         register(client7, "user7", "pass7");
         login(client7, "user7", "pass7");
 
-        // user6의 USER_JOINED(user7) 메시지 소비
-        client6.receive();
+        // user6, user7 동일 세션 참여 (텍스트 편집은 세션 안에서만 broadcast됨 — Phase 5.4)
+        Message createMsg = new Message(MessageType.SESSION_CREATE, "user6");
+        createMsg.setPayloadFromObject(new SessionCreateRequest("disc-session"));
+        client6.send(createMsg);
+        String sid = null;
+        // SESSION_CREATE_RESPONSE 받을 때까지 소비 (USER_JOINED 등은 무시)
+        for (int i = 0; i < 10; i++) {
+            Message m = client6.receive();
+            if (m.getType() == MessageType.SESSION_CREATE_RESPONSE) {
+                sid = m.getPayloadAs(SessionCreateResponse.class).getSessionId();
+                break;
+            }
+        }
+        assertNotNull(sid);
+
+        Message joinMsg = new Message(MessageType.SESSION_JOIN, "user6");
+        joinMsg.setPayloadFromObject(new SessionJoinRequest(sid));
+        client6.send(joinMsg);
+        for (int i = 0; i < 10; i++) {
+            Message m = client6.receive();
+            if (m.getType() == MessageType.SESSION_JOIN_RESPONSE) {
+                assertTrue(m.getPayloadAs(SessionJoinResponse.class).isSuccess());
+                break;
+            }
+        }
+
+        Message join7 = new Message(MessageType.SESSION_JOIN, "user7");
+        join7.setPayloadFromObject(new SessionJoinRequest(sid));
+        client7.send(join7);
+        for (int i = 0; i < 10; i++) {
+            Message m = client7.receive();
+            if (m.getType() == MessageType.SESSION_JOIN_RESPONSE) {
+                assertTrue(m.getPayloadAs(SessionJoinResponse.class).isSuccess());
+                break;
+            }
+        }
 
         // user7의 소켓을 닫아서 전송 불가 상태로 만듦 (LOGOUT 안 보냄)
         client7.getSocket().close();
         Thread.sleep(300);
 
-        // user6이 텍스트 편집 → 서버가 user7에게 브로드캐스트 시도 → 실패 → user7 자동 해제
+        // user6이 텍스트 편집 → 서버가 같은 세션 참여자 user7에게 브로드캐스트 시도 → 실패 → user7 자동 해제
         Message editMsg = new Message(MessageType.TEXT_INSERT, "user6");
         editMsg.setPayloadFromObject(new TextInsert(0, "hello"));
         client6.send(editMsg);

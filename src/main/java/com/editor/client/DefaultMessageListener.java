@@ -4,6 +4,7 @@ import com.editor.common.Message;
 import com.editor.common.payload.LoginResponse;
 import com.editor.common.payload.RegisterResponse;
 import com.editor.common.payload.SessionCreateResponse;
+import com.editor.common.payload.SessionJoinResponse;
 import com.editor.common.payload.SessionListResponse;
 import com.editor.common.payload.UserEvent;
 
@@ -115,6 +116,16 @@ public class DefaultMessageListener implements MessageListener {
         MainFrame mainFrame = getMainFrame();
         if (mainFrame != null) {
             mainFrame.handleSessionListResponse(msg);
+        }
+    }
+
+    @Override
+    public void onSessionJoinResponse(Message msg) {
+        SessionJoinResponse resp = msg.getPayloadAs(SessionJoinResponse.class);
+        System.out.println("[SESSION JOIN] " + (resp.isSuccess() ? "OK: " + resp.getSessionName() : "FAIL: " + resp.getMessage()));
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleSessionJoinResponse(msg);
         }
     }
 

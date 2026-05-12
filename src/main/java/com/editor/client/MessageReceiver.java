@@ -78,6 +78,9 @@ public class MessageReceiver implements Runnable {
             case SESSION_LIST_RESPONSE:
                 listener.onSessionListResponse(msg);
                 break;
+            case SESSION_JOIN_RESPONSE:
+                listener.onSessionJoinResponse(msg);
+                break;
 
             // 실시간 편집 과정
             case REALTIME_EDIT:

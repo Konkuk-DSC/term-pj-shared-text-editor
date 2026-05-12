@@ -10,6 +10,8 @@ import com.editor.common.payload.RegisterResponse;
 import com.editor.common.payload.SessionCreateRequest;
 import com.editor.common.payload.SessionCreateResponse;
 import com.editor.common.payload.SessionInfo;
+import com.editor.common.payload.SessionJoinRequest;
+import com.editor.common.payload.SessionJoinResponse;
 import com.editor.common.payload.SessionListResponse;
 import com.editor.common.payload.TextDelete;
 import com.editor.common.payload.TextInsert;
@@ -19,6 +21,7 @@ import com.editor.common.payload.UserEvent;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -30,6 +33,7 @@ public class ClientHandler implements Runnable {
     private final NetworkUtil networkUtil;
     private final ServerMain server;
     private volatile String userId;
+    private volatile String currentSessionId; // Phase 5.4 — 현재 참여 중인 세션 ID (null이면 로비)
     private final AtomicBoolean disconnected = new AtomicBoolean(false);
 
     public ClientHandler(NetworkUtil networkUtil, ServerMain server) {
@@ -195,16 +199,29 @@ public class ClientHandler implements Runnable {
         String uid = this.userId; // 로컬 복사 — disconnect()와의 TOCTOU 방지
         if (uid == null) return; // 미인증 클라이언트 무시
 
-        // buffer 적용 + broadcast를 같은 lock 안에서 원자적으로 수행.
-        // handleLogin의 LoginResponse 전송과 직렬화되어, 신규 접속자가 stale snapshot을 받는 race를 차단한다.
-        DocumentBuffer buffer = server.getDocumentBuffer();
+        // Phase 5.4 — 텍스트 편집은 세션 안에서만 허용
+        String sid = this.currentSessionId;
+        if (sid == null) {
+            System.out.println("[TEXT EDIT IGNORED] " + uid + " is not in any session");
+            return;
+        }
+        Session session = server.getSessionStore().get(sid);
+        if (session == null) {
+            // 세션이 사라졌으면 로비로 되돌림
+            this.currentSessionId = null;
+            return;
+        }
+
+        // 세션 buffer 적용 + 같은 세션 참여자에게 broadcast를 같은 lock 안에서 원자적으로 수행.
+        // SessionJoinResponse 전송(같은 buffer lock 보호)과 직렬화되어, 신규 참여자가 stale snapshot을 받는 race를 차단한다.
+        DocumentBuffer buffer = session.getBuffer();
         synchronized (buffer) {
             boolean applied = false;
             switch (msg.getType()) {
                 case TEXT_INSERT: {
                     TextInsert payload = msg.getPayloadAs(TextInsert.class);
                     applied = buffer.insert(payload.getOffset(), payload.getText());
-                    System.out.println("[TEXT_INSERT] by " + uid
+                    System.out.println("[TEXT_INSERT] by " + uid + " in " + session.getSessionName()
                             + " offset=" + payload.getOffset()
                             + " text=\"" + payload.getText() + "\""
                             + " (bufferLen=" + buffer.length() + ")");
@@ -213,7 +230,7 @@ public class ClientHandler implements Runnable {
                 case TEXT_DELETE: {
                     TextDelete payload = msg.getPayloadAs(TextDelete.class);
                     applied = buffer.delete(payload.getOffset(), payload.getLength());
-                    System.out.println("[TEXT_DELETE] by " + uid
+                    System.out.println("[TEXT_DELETE] by " + uid + " in " + session.getSessionName()
                             + " offset=" + payload.getOffset()
                             + " length=" + payload.getLength()
                             + " (bufferLen=" + buffer.length() + ")");
@@ -222,7 +239,7 @@ public class ClientHandler implements Runnable {
                 case TEXT_UPDATE: {
                     TextUpdate payload = msg.getPayloadAs(TextUpdate.class);
                     applied = buffer.update(payload.getOffset(), payload.getLength(), payload.getNewText());
-                    System.out.println("[TEXT_UPDATE] by " + uid
+                    System.out.println("[TEXT_UPDATE] by " + uid + " in " + session.getSessionName()
                             + " offset=" + payload.getOffset()
                             + " length=" + payload.getLength()
                             + " newText=\"" + payload.getNewText() + "\""
@@ -238,8 +255,9 @@ public class ClientHandler implements Runnable {
                 return;
             }
 
-            // 송신자 제외 전체에게 브로드캐스트 (lock 안에서 수행하여 LoginResponse와 순서 보장)
-            server.broadcast(msg, uid);
+            session.touchModified();
+            // 같은 세션 참여자에게만 broadcast (송신자 제외)
+            server.broadcastToSession(session, msg, uid);
         }
     }
 
@@ -254,8 +272,7 @@ public class ClientHandler implements Runnable {
                 handleSessionListRequest(msg);
                 break;
             case SESSION_JOIN:
-                // TODO: 5.4에서 구현
-                System.out.println("[SESSION TODO] " + msg.getType() + " from " + userId);
+                handleSessionJoin(msg);
                 break;
             default:
                 break;
@@ -295,6 +312,71 @@ public class ClientHandler implements Runnable {
         Message listMsg = new Message(MessageType.SESSION_LIST_RESPONSE, "server");
         listMsg.setPayloadFromObject(new SessionListResponse(buildSessionInfoList()));
         server.broadcast(listMsg);
+    }
+
+    private void handleSessionJoin(Message msg) {
+        String uid = this.userId;
+        if (uid == null) {
+            sendJoinFailure("Not authenticated.");
+            return;
+        }
+
+        SessionJoinRequest req = msg.getPayloadAs(SessionJoinRequest.class);
+        String sid = (req == null) ? null : req.getSessionId();
+        if (sid == null || sid.isEmpty()) {
+            sendJoinFailure("Session ID required.");
+            return;
+        }
+
+        Session target = server.getSessionStore().get(sid);
+        if (target == null) {
+            sendJoinFailure("Session not found.");
+            return;
+        }
+
+        // 이미 같은 세션이면 idempotent하게 현재 상태 재전송
+        String previousSid = this.currentSessionId;
+        if (previousSid != null && !previousSid.equals(sid)) {
+            Session prev = server.getSessionStore().get(previousSid);
+            if (prev != null) {
+                prev.removeParticipant(uid);
+            }
+        }
+
+        // target session 추가 + 현재 내용 스냅샷 + 응답 전송을 buffer lock 안에서 원자적으로 수행.
+        // handleTextEdit이 같은 lock으로 buffer + broadcast를 직렬화하므로,
+        // SessionJoinResponse 전송 도중 같은 세션의 TEXT_INSERT가 먼저 도달하는 race를 차단한다.
+        DocumentBuffer buffer = target.getBuffer();
+        synchronized (buffer) {
+            target.addParticipant(uid);
+            this.currentSessionId = sid;
+
+            String content = buffer.getText();
+            Set<String> participants = target.getParticipants();
+            List<String> participantList = new ArrayList<>(participants);
+
+            Message resp = new Message(MessageType.SESSION_JOIN_RESPONSE, "server");
+            resp.setPayloadFromObject(new SessionJoinResponse(
+                    true, "Joined session.",
+                    target.getSessionId(), target.getSessionName(),
+                    content, participantList));
+            networkUtil.send(resp);
+        }
+
+        System.out.println("[SESSION_JOIN OK] " + uid + " → " + target.getSessionName()
+                + " (" + target.getSessionId() + ")");
+
+        // 참여자 수가 변경되었으므로 전체에게 갱신된 세션 목록 push
+        Message listMsg = new Message(MessageType.SESSION_LIST_RESPONSE, "server");
+        listMsg.setPayloadFromObject(new SessionListResponse(buildSessionInfoList()));
+        server.broadcast(listMsg);
+    }
+
+    private void sendJoinFailure(String reason) {
+        Message resp = new Message(MessageType.SESSION_JOIN_RESPONSE, "server");
+        resp.setPayloadFromObject(new SessionJoinResponse(false, reason, null, null, null, null));
+        networkUtil.send(resp);
+        System.out.println("[SESSION_JOIN FAIL] " + userId + " — " + reason);
     }
 
     private void handleSessionListRequest(Message msg) {
@@ -353,6 +435,17 @@ public class ClientHandler implements Runnable {
         String uid = this.userId;
         this.userId = null;
 
+        // Phase 5.4 — 참여 중인 세션에서 빠지기 (참여자 수 업데이트 위해 broadcast)
+        String sid = this.currentSessionId;
+        this.currentSessionId = null;
+        boolean leftSession = false;
+        if (sid != null && uid != null) {
+            Session session = server.getSessionStore().get(sid);
+            if (session != null) {
+                leftSession = session.removeParticipant(uid);
+            }
+        }
+
         if (uid != null) {
             server.removeClient(uid);
 
@@ -360,6 +453,13 @@ public class ClientHandler implements Runnable {
             Message leftMsg = new Message(MessageType.USER_LEFT, "server");
             leftMsg.setPayloadFromObject(new UserEvent(uid));
             server.broadcast(leftMsg);
+
+            // 세션 참여자가 감소했다면 세션 목록도 갱신해서 전체에게 push
+            if (leftSession) {
+                Message listMsg = new Message(MessageType.SESSION_LIST_RESPONSE, "server");
+                listMsg.setPayloadFromObject(new SessionListResponse(buildSessionInfoList()));
+                server.broadcast(listMsg);
+            }
         }
         networkUtil.close();
     }

@@ -5,6 +5,8 @@ import com.editor.common.MessageType;
 import com.editor.common.payload.SessionCreateRequest;
 import com.editor.common.payload.SessionCreateResponse;
 import com.editor.common.payload.SessionInfo;
+import com.editor.common.payload.SessionJoinRequest;
+import com.editor.common.payload.SessionJoinResponse;
 import com.editor.common.payload.SessionListResponse;
 import com.editor.common.payload.TextDelete;
 import com.editor.common.payload.TextInsert;
@@ -16,6 +18,8 @@ import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.text.BadLocationException;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.text.SimpleDateFormat;
@@ -39,6 +43,8 @@ public class MainFrame extends JFrame {
     private DefaultListModel<String> sessionListModel;
     private JList<String> sessionList;
     private java.util.List<SessionInfo> currentSessions = new java.util.ArrayList<>();
+    private volatile String currentSessionId; // Phase 5.4 — null이면 로비 상태
+    private volatile String currentSessionName;
 
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
         this(client, userId, onlineUsers, null);
@@ -134,6 +140,19 @@ public class MainFrame extends JFrame {
             client.send(msg);
         });
 
+        // 더블 클릭 → 해당 세션 참여
+        sessionList.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() != 2) return;
+                int idx = sessionList.locationToIndex(e.getPoint());
+                if (idx < 0 || idx >= currentSessions.size()) return;
+                SessionInfo info = currentSessions.get(idx);
+                if (info.getSessionId().equals(currentSessionId)) return; // 이미 참여 중
+                joinSession(info.getSessionId());
+            }
+        });
+
         add(sessionPanel, BorderLayout.WEST);
 
         // ── 에디터 영역 (중앙) ──
@@ -142,6 +161,9 @@ public class MainFrame extends JFrame {
         editorArea.setLineWrap(true);
         editorArea.setWrapStyleWord(true);
         editorArea.setTabSize(4);
+
+        // Phase 5.4 — 세션에 참여하기 전에는 편집 불가
+        editorArea.setEditable(false);
 
         // 초기 문서 내용 설정 (Late-comer 동기화) — DocumentListener 등록 전에 수행
         if (initialContent != null && !initialContent.isEmpty()) {
@@ -292,12 +314,50 @@ public class MainFrame extends JFrame {
             sessionListModel.clear();
             SimpleDateFormat sdf = new SimpleDateFormat("MM/dd HH:mm");
             for (SessionInfo info : currentSessions) {
-                String display = info.getSessionName()
+                String marker = info.getSessionId().equals(currentSessionId) ? "★ " : "  ";
+                String display = marker + info.getSessionName()
                         + "  [" + info.getParticipantCount() + "명]"
                         + "  " + sdf.format(new Date(info.getLastModifiedAt()));
                 sessionListModel.addElement(display);
             }
         });
+    }
+
+    public void handleSessionJoinResponse(Message msg) {
+        SessionJoinResponse resp = msg.getPayloadAs(SessionJoinResponse.class);
+        SwingUtilities.invokeLater(() -> {
+            if (!resp.isSuccess()) {
+                JOptionPane.showMessageDialog(this,
+                        "Failed to join session: " + resp.getMessage(),
+                        "Session Join Failed", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            currentSessionId = resp.getSessionId();
+            currentSessionName = resp.getSessionName();
+
+            // 서버가 보낸 세션 내용으로 에디터 교체. 원격 변경 플래그로 DocumentListener 재전송 차단.
+            try {
+                isRemoteChange = true;
+                String content = resp.getDocumentContent() == null ? "" : resp.getDocumentContent();
+                editorArea.setText(content);
+                editorArea.setCaretPosition(0);
+            } finally {
+                isRemoteChange = false;
+            }
+
+            editorArea.setEditable(true);
+            setTitle("Shared Text Editor — " + userId + " @ " + currentSessionName);
+            setStatus("Joined session: " + currentSessionName);
+        });
+    }
+
+    private void joinSession(String sessionId) {
+        // 응답 도착 전 사이 입력으로 인한 race를 막기 위해 에디터를 잠시 잠근다.
+        editorArea.setEditable(false);
+        Message msg = new Message(MessageType.SESSION_JOIN, userId);
+        msg.setPayloadFromObject(new SessionJoinRequest(sessionId));
+        client.send(msg);
     }
 
     public void handleDisconnected() {
