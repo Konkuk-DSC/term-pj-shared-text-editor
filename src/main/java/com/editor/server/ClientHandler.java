@@ -251,8 +251,10 @@ public class ClientHandler implements Runnable {
                 handleSessionCreate(msg);
                 break;
             case SESSION_LIST_REQUEST:
+                handleSessionListRequest(msg);
+                break;
             case SESSION_JOIN:
-                // TODO: 5.3 / 5.4에서 구현
+                // TODO: 5.4에서 구현
                 System.out.println("[SESSION TODO] " + msg.getType() + " from " + userId);
                 break;
             default:
@@ -293,6 +295,16 @@ public class ClientHandler implements Runnable {
         Message listMsg = new Message(MessageType.SESSION_LIST_RESPONSE, "server");
         listMsg.setPayloadFromObject(new SessionListResponse(buildSessionInfoList()));
         server.broadcast(listMsg);
+    }
+
+    private void handleSessionListRequest(Message msg) {
+        String uid = this.userId;
+        if (uid == null) return;
+
+        Message resp = new Message(MessageType.SESSION_LIST_RESPONSE, "server");
+        resp.setPayloadFromObject(new SessionListResponse(buildSessionInfoList()));
+        networkUtil.send(resp);
+        System.out.println("[SESSION_LIST] sent to " + uid + " (" + server.getSessionStore().size() + " sessions)");
     }
 
     private List<SessionInfo> buildSessionInfoList() {

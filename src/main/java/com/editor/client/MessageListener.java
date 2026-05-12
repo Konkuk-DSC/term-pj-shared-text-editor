@@ -24,6 +24,10 @@ public interface MessageListener {
 
     void onTextUpdate(Message msg);
 
+    void onSessionCreateResponse(Message msg);
+
+    void onSessionListResponse(Message msg);
+
     void onRealtimeEdit(Message msg);
 
     void onCursorMove(Message msg);

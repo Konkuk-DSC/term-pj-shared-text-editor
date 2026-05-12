@@ -3,6 +3,8 @@ package com.editor.client;
 import com.editor.common.Message;
 import com.editor.common.payload.LoginResponse;
 import com.editor.common.payload.RegisterResponse;
+import com.editor.common.payload.SessionCreateResponse;
+import com.editor.common.payload.SessionListResponse;
 import com.editor.common.payload.UserEvent;
 
 /**
@@ -93,6 +95,26 @@ public class DefaultMessageListener implements MessageListener {
         MainFrame mainFrame = getMainFrame();
         if (mainFrame != null) {
             mainFrame.handleTextUpdate(msg);
+        }
+    }
+
+    @Override
+    public void onSessionCreateResponse(Message msg) {
+        SessionCreateResponse resp = msg.getPayloadAs(SessionCreateResponse.class);
+        System.out.println("[SESSION CREATE] " + (resp.isSuccess() ? "OK: " + resp.getSessionName() : "FAIL: " + resp.getMessage()));
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleSessionCreateResponse(msg);
+        }
+    }
+
+    @Override
+    public void onSessionListResponse(Message msg) {
+        SessionListResponse resp = msg.getPayloadAs(SessionListResponse.class);
+        System.out.println("[SESSION LIST] " + resp.getSessions().size() + " sessions");
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleSessionListResponse(msg);
         }
     }
 

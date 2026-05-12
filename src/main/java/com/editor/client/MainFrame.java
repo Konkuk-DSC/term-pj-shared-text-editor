@@ -2,6 +2,10 @@ package com.editor.client;
 
 import com.editor.common.Message;
 import com.editor.common.MessageType;
+import com.editor.common.payload.SessionCreateRequest;
+import com.editor.common.payload.SessionCreateResponse;
+import com.editor.common.payload.SessionInfo;
+import com.editor.common.payload.SessionListResponse;
 import com.editor.common.payload.TextDelete;
 import com.editor.common.payload.TextInsert;
 import com.editor.common.payload.TextUpdate;
@@ -14,6 +18,8 @@ import javax.swing.text.BadLocationException;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -30,6 +36,9 @@ public class MainFrame extends JFrame {
     private JLabel statusLabel;
     private JTextArea editorArea;
     private volatile boolean isRemoteChange = false;
+    private DefaultListModel<String> sessionListModel;
+    private JList<String> sessionList;
+    private java.util.List<SessionInfo> currentSessions = new java.util.ArrayList<>();
 
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
         this(client, userId, onlineUsers, null);
@@ -39,6 +48,12 @@ public class MainFrame extends JFrame {
         this.client = client;
         this.userId = userId;
         initUI(onlineUsers, initialContent);
+        requestSessionList();
+    }
+
+    private void requestSessionList() {
+        Message msg = new Message(MessageType.SESSION_LIST_REQUEST, userId);
+        client.send(msg);
     }
 
     private void initUI(List<String> onlineUsers, String initialContent) {
@@ -81,6 +96,45 @@ public class MainFrame extends JFrame {
         userPanel.add(userScrollPane, BorderLayout.CENTER);
 
         add(userPanel, BorderLayout.EAST);
+
+        // ── 세션 목록 패널 (좌측) ──
+        sessionListModel = new DefaultListModel<>();
+        sessionList = new JList<>(sessionListModel);
+        sessionList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        sessionList.setFont(new Font("SansSerif", Font.PLAIN, 12));
+
+        JScrollPane sessionScrollPane = new JScrollPane(sessionList);
+        sessionScrollPane.setPreferredSize(new Dimension(200, 0));
+
+        JPanel sessionPanel = new JPanel(new BorderLayout());
+        JLabel sessionTitle = new JLabel("Sessions", SwingConstants.CENTER);
+        sessionTitle.setFont(new Font("SansSerif", Font.BOLD, 13));
+        sessionTitle.setBorder(BorderFactory.createEmptyBorder(8, 0, 8, 0));
+        sessionPanel.add(sessionTitle, BorderLayout.NORTH);
+        sessionPanel.add(sessionScrollPane, BorderLayout.CENTER);
+
+        JPanel sessionButtonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 5, 5));
+        JButton newSessionBtn = new JButton("New");
+        JButton refreshBtn = new JButton("Refresh");
+        sessionButtonPanel.add(newSessionBtn);
+        sessionButtonPanel.add(refreshBtn);
+        sessionPanel.add(sessionButtonPanel, BorderLayout.SOUTH);
+
+        newSessionBtn.addActionListener(e -> {
+            String name = JOptionPane.showInputDialog(this, "Session name:", "New Session", JOptionPane.PLAIN_MESSAGE);
+            if (name != null && !name.trim().isEmpty()) {
+                Message msg = new Message(MessageType.SESSION_CREATE, userId);
+                msg.setPayloadFromObject(new SessionCreateRequest(name.trim()));
+                client.send(msg);
+            }
+        });
+
+        refreshBtn.addActionListener(e -> {
+            Message msg = new Message(MessageType.SESSION_LIST_REQUEST, userId);
+            client.send(msg);
+        });
+
+        add(sessionPanel, BorderLayout.WEST);
 
         // ── 에디터 영역 (중앙) ──
         editorArea = new JTextArea();
@@ -214,6 +268,34 @@ public class MainFrame extends JFrame {
                 System.err.println("[REMOTE UPDATE] BadLocation: " + e.getMessage());
             } finally {
                 isRemoteChange = false;
+            }
+        });
+    }
+
+    // ── 세션 관리 수신 (Phase 5.3) ──
+
+    public void handleSessionCreateResponse(Message msg) {
+        SessionCreateResponse resp = msg.getPayloadAs(SessionCreateResponse.class);
+        SwingUtilities.invokeLater(() -> {
+            if (resp.isSuccess()) {
+                setStatus("Session created: " + resp.getSessionName());
+            } else {
+                JOptionPane.showMessageDialog(this, resp.getMessage(), "Session Error", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+    }
+
+    public void handleSessionListResponse(Message msg) {
+        SessionListResponse resp = msg.getPayloadAs(SessionListResponse.class);
+        SwingUtilities.invokeLater(() -> {
+            currentSessions = resp.getSessions();
+            sessionListModel.clear();
+            SimpleDateFormat sdf = new SimpleDateFormat("MM/dd HH:mm");
+            for (SessionInfo info : currentSessions) {
+                String display = info.getSessionName()
+                        + "  [" + info.getParticipantCount() + "명]"
+                        + "  " + sdf.format(new Date(info.getLastModifiedAt()));
+                sessionListModel.addElement(display);
             }
         });
     }

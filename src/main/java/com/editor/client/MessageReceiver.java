@@ -71,6 +71,14 @@ public class MessageReceiver implements Runnable {
                 listener.onTextUpdate(msg);
                 break;
 
+            // 세션 관리
+            case SESSION_CREATE_RESPONSE:
+                listener.onSessionCreateResponse(msg);
+                break;
+            case SESSION_LIST_RESPONSE:
+                listener.onSessionListResponse(msg);
+                break;
+
             // 실시간 편집 과정
             case REALTIME_EDIT:
                 listener.onRealtimeEdit(msg);
