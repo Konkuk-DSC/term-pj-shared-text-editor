@@ -27,6 +27,15 @@ public class SessionStore {
         return session;
     }
 
+    /**
+     * 외부에서 생성된 Session을 그대로 등록한다 (Phase 5.6 — 영속화 로드용).
+     * 이미 같은 sessionId가 있으면 false 반환.
+     */
+    public boolean register(Session session) {
+        if (session == null) return false;
+        return sessions.putIfAbsent(session.getSessionId(), session) == null;
+    }
+
     public Session get(String sessionId) {
         if (sessionId == null) {
             return null;

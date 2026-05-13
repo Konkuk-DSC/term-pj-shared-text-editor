@@ -29,11 +29,17 @@ public class ServerMain {
     // 사용자 계정 저장소
     private final AccountStore accountStore = new AccountStore();
 
-    // 서버 측 문서 버퍼 (현재 텍스트 상태 유지)
-    private final DocumentBuffer documentBuffer = new DocumentBuffer();
-
     // 세션 목록 관리소 (Phase 5)
+    // Phase 5.4 이후 모든 텍스트 편집은 세션 buffer를 통과한다.
+    // (Phase 5.5에서 전역 DocumentBuffer는 더 이상 쓰이지 않아 제거됨)
     private final SessionStore sessionStore = new SessionStore();
+
+    // 세션 영속화 (Phase 5.5)
+    private final SessionPersistence sessionPersistence = new SessionPersistence();
+
+    // saveAll 중복 호출 방지 (shutdown hook + 수동 stop 동시 실행 대비)
+    private final java.util.concurrent.atomic.AtomicBoolean sessionsSaved =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     public ServerMain(int port) {
         this.port = port;
@@ -44,15 +50,18 @@ public class ServerMain {
         return accountStore;
     }
 
-    public DocumentBuffer getDocumentBuffer() {
-        return documentBuffer;
-    }
-
     public SessionStore getSessionStore() {
         return sessionStore;
     }
 
+    public SessionPersistence getSessionPersistence() {
+        return sessionPersistence;
+    }
+
     public void start() {
+        // Phase 5.6 — 디스크에 저장된 세션을 복원한 뒤 리스닝 시작
+        sessionPersistence.loadAll(sessionStore);
+
         try {
             serverSocket = new ServerSocket(port);
             System.out.println("Server started on port " + port);
@@ -74,6 +83,17 @@ public class ServerMain {
     }
 
     public void stop() {
+        // Phase 5.5 — 세션 저장. 클라이언트 연결을 끊기 전에 수행해
+        //   진행 중인 편집이 lock으로 직렬화되어 일관된 스냅샷으로 저장되도록 한다.
+        //   AtomicBoolean으로 중복 호출(shutdown hook 등) 방지.
+        if (sessionsSaved.compareAndSet(false, true)) {
+            try {
+                sessionPersistence.saveAll(sessionStore);
+            } catch (RuntimeException e) {
+                System.err.println("[PERSIST] Unexpected error during saveAll: " + e.getMessage());
+            }
+        }
+
         try {
             if (serverSocket != null && !serverSocket.isClosed()) {
                 serverSocket.close();

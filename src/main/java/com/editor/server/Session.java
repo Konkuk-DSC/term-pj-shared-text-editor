@@ -28,6 +28,23 @@ public class Session {
         this.lastModifiedAt = this.createdAt;
     }
 
+    /**
+     * Phase 5.6 — 영속화된 데이터로부터 세션을 복원하기 위한 생성자.
+     * 원본 createdAt / lastModifiedAt을 그대로 유지하고, 저장된 텍스트를 buffer에 채워둔다.
+     * 참여자(participants)는 런타임 상태이므로 빈 상태로 시작한다.
+     */
+    public Session(String sessionId, String sessionName,
+                   long createdAt, long lastModifiedAt, String initialContent) {
+        this.sessionId = sessionId;
+        this.sessionName = sessionName;
+        this.buffer = new DocumentBuffer();
+        this.createdAt = createdAt;
+        this.lastModifiedAt = lastModifiedAt;
+        if (initialContent != null && !initialContent.isEmpty()) {
+            this.buffer.insert(0, initialContent);
+        }
+    }
+
     public String getSessionId() {
         return sessionId;
     }

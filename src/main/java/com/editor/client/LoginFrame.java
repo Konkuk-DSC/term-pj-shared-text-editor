@@ -143,7 +143,7 @@ public class LoginFrame extends JFrame {
             try {
                 SwingUtilities.invokeAndWait(() -> {
                     loggedInUserId = userIdField.getText().trim();
-                    mainFrame = new MainFrame(client, loggedInUserId, resp.getOnlineUsers(), resp.getDocumentContent());
+                    mainFrame = new MainFrame(client, loggedInUserId, resp.getOnlineUsers());
                     mainFrame.setVisible(true);
                     dispose();
                 });

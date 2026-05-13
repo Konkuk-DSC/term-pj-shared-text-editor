@@ -42,18 +42,16 @@ public class MainFrame extends JFrame {
     private volatile boolean isRemoteChange = false;
     private DefaultListModel<String> sessionListModel;
     private JList<String> sessionList;
+    private JLabel currentSessionLabel; // Phase 5.7 — 현재 참여 중인 세션 표시
+    private JButton joinSessionBtn;     // Phase 5.7
     private java.util.List<SessionInfo> currentSessions = new java.util.ArrayList<>();
     private volatile String currentSessionId; // Phase 5.4 — null이면 로비 상태
     private volatile String currentSessionName;
 
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
-        this(client, userId, onlineUsers, null);
-    }
-
-    public MainFrame(ClientMain client, String userId, List<String> onlineUsers, String initialContent) {
         this.client = client;
         this.userId = userId;
-        initUI(onlineUsers, initialContent);
+        initUI(onlineUsers);
         requestSessionList();
     }
 
@@ -62,7 +60,7 @@ public class MainFrame extends JFrame {
         client.send(msg);
     }
 
-    private void initUI(List<String> onlineUsers, String initialContent) {
+    private void initUI(List<String> onlineUsers) {
         setTitle("Shared Text Editor — " + userId);
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -113,18 +111,47 @@ public class MainFrame extends JFrame {
         sessionScrollPane.setPreferredSize(new Dimension(200, 0));
 
         JPanel sessionPanel = new JPanel(new BorderLayout());
+
+        // 세션 패널 상단: 제목 + 현재 참여 세션 표시
+        JPanel sessionHeader = new JPanel(new BorderLayout());
         JLabel sessionTitle = new JLabel("Sessions", SwingConstants.CENTER);
         sessionTitle.setFont(new Font("SansSerif", Font.BOLD, 13));
-        sessionTitle.setBorder(BorderFactory.createEmptyBorder(8, 0, 8, 0));
-        sessionPanel.add(sessionTitle, BorderLayout.NORTH);
+        sessionTitle.setBorder(BorderFactory.createEmptyBorder(8, 0, 4, 0));
+        sessionHeader.add(sessionTitle, BorderLayout.NORTH);
+
+        currentSessionLabel = new JLabel("Current: (lobby)", SwingConstants.CENTER);
+        currentSessionLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        currentSessionLabel.setForeground(Color.GRAY);
+        currentSessionLabel.setBorder(BorderFactory.createEmptyBorder(0, 4, 6, 4));
+        sessionHeader.add(currentSessionLabel, BorderLayout.SOUTH);
+
+        sessionPanel.add(sessionHeader, BorderLayout.NORTH);
         sessionPanel.add(sessionScrollPane, BorderLayout.CENTER);
 
-        JPanel sessionButtonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 5, 5));
+        // 세션 패널 하단: 버튼 (New / Join / Refresh)
+        JPanel sessionButtonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 4, 5));
         JButton newSessionBtn = new JButton("New");
+        joinSessionBtn = new JButton("Join");
         JButton refreshBtn = new JButton("Refresh");
+        joinSessionBtn.setEnabled(false); // 선택된 세션 없을 때 비활성
         sessionButtonPanel.add(newSessionBtn);
+        sessionButtonPanel.add(joinSessionBtn);
         sessionButtonPanel.add(refreshBtn);
         sessionPanel.add(sessionButtonPanel, BorderLayout.SOUTH);
+
+        // 선택 변경 시 Join 버튼 활성/비활성 갱신 (이미 참여 중인 세션은 비활성)
+        sessionList.addListSelectionListener(e -> {
+            if (e.getValueIsAdjusting()) return;
+            updateJoinButtonState();
+        });
+
+        joinSessionBtn.addActionListener(e -> {
+            int idx = sessionList.getSelectedIndex();
+            if (idx < 0 || idx >= currentSessions.size()) return;
+            SessionInfo info = currentSessions.get(idx);
+            if (info.getSessionId().equals(currentSessionId)) return;
+            joinSession(info.getSessionId());
+        });
 
         newSessionBtn.addActionListener(e -> {
             String name = JOptionPane.showInputDialog(this, "Session name:", "New Session", JOptionPane.PLAIN_MESSAGE);
@@ -162,14 +189,8 @@ public class MainFrame extends JFrame {
         editorArea.setWrapStyleWord(true);
         editorArea.setTabSize(4);
 
-        // Phase 5.4 — 세션에 참여하기 전에는 편집 불가
+        // Phase 5.4 — 세션에 참여하기 전에는 편집 불가 (로비 상태)
         editorArea.setEditable(false);
-
-        // 초기 문서 내용 설정 (Late-comer 동기화) — DocumentListener 등록 전에 수행
-        if (initialContent != null && !initialContent.isEmpty()) {
-            editorArea.setText(initialContent);
-            editorArea.setCaretPosition(0);
-        }
 
         editorArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
@@ -217,7 +238,7 @@ public class MainFrame extends JFrame {
         add(editorScrollPane, BorderLayout.CENTER);
 
         // ── 상태바 (하단) ──
-        statusLabel = new JLabel("  Connected as: " + userId);
+        statusLabel = new JLabel("  Connected as: " + userId + " — Double-click a session or select + Join to start editing");
         statusLabel.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(1, 0, 0, 0, Color.LIGHT_GRAY),
                 BorderFactory.createEmptyBorder(4, 8, 4, 8)
@@ -320,7 +341,19 @@ public class MainFrame extends JFrame {
                         + "  " + sdf.format(new Date(info.getLastModifiedAt()));
                 sessionListModel.addElement(display);
             }
+            updateJoinButtonState();
         });
+    }
+
+    /** Phase 5.7 — 선택된 세션과 현재 참여 세션을 비교해 Join 버튼 활성화 갱신 */
+    private void updateJoinButtonState() {
+        int idx = sessionList.getSelectedIndex();
+        boolean enabled = false;
+        if (idx >= 0 && idx < currentSessions.size()) {
+            SessionInfo info = currentSessions.get(idx);
+            enabled = !info.getSessionId().equals(currentSessionId);
+        }
+        joinSessionBtn.setEnabled(enabled);
     }
 
     public void handleSessionJoinResponse(Message msg) {
@@ -348,8 +381,29 @@ public class MainFrame extends JFrame {
 
             editorArea.setEditable(true);
             setTitle("Shared Text Editor — " + userId + " @ " + currentSessionName);
+            currentSessionLabel.setText("Current: " + currentSessionName);
+            currentSessionLabel.setForeground(new Color(0, 100, 0));
             setStatus("Joined session: " + currentSessionName);
+
+            // 세션 목록의 ★ 마커 및 Join 버튼 상태 갱신을 위해 재요청
+            // (참여자 수 변경 broadcast가 곧 도착하지만, 즉시 반영을 위해 한 번 더 요청)
+            updateJoinButtonState();
+            // 새로 참여한 세션 항목에 ★ 표시
+            refreshSessionListDisplay();
         });
+    }
+
+    /** Phase 5.7 — 세션 목록 표시만 재구성 (서버 재요청 없이 ★ 마커 갱신) */
+    private void refreshSessionListDisplay() {
+        sessionListModel.clear();
+        SimpleDateFormat sdf = new SimpleDateFormat("MM/dd HH:mm");
+        for (SessionInfo info : currentSessions) {
+            String marker = info.getSessionId().equals(currentSessionId) ? "★ " : "  ";
+            String display = marker + info.getSessionName()
+                    + "  [" + info.getParticipantCount() + "명]"
+                    + "  " + sdf.format(new Date(info.getLastModifiedAt()));
+            sessionListModel.addElement(display);
+        }
     }
 
     private void joinSession(String sessionId) {

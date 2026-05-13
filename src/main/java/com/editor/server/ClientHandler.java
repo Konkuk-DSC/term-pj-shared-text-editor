@@ -153,17 +153,12 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // 로그인 성공 시 현재 문서 전체 내용 + LoginResponse 전송을 buffer lock 안에서 원자적으로 수행.
-        // handleTextEdit이 같은 lock을 잡고 buffer 적용 + broadcast 하므로,
-        // LoginResponse 전송 도중 다른 클라이언트의 INSERT 메시지가 이 클라이언트에 먼저 도착하는 race를 차단한다.
-        DocumentBuffer buffer = server.getDocumentBuffer();
-        synchronized (buffer) {
-            String currentDoc = buffer.getText();
-            response.setPayloadFromObject(new LoginResponse(true, "Login successful.", server.getOnlineUsers(), currentDoc));
-            networkUtil.send(response);
-        }
+        // 로그인 직후 클라이언트는 로비 상태(어떤 세션에도 참여하지 않음).
+        // 텍스트 편집은 세션 안에서만 동작하므로 documentContent 동봉이 필요 없다 (Phase 5.4~5.5).
+        response.setPayloadFromObject(new LoginResponse(true, "Login successful.", server.getOnlineUsers()));
+        networkUtil.send(response);
 
-        // 전체에게 입장 알림 (buffer와 무관하므로 lock 밖에서 broadcast)
+        // 전체에게 입장 알림
         Message joinMsg = new Message(MessageType.USER_JOINED, "server");
         joinMsg.setPayloadFromObject(new UserEvent(userId));
         server.broadcast(joinMsg, userId);
