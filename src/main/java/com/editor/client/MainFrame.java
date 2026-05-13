@@ -363,6 +363,12 @@ public class MainFrame extends JFrame {
                 JOptionPane.showMessageDialog(this,
                         "Failed to join session: " + resp.getMessage(),
                         "Session Join Failed", JOptionPane.ERROR_MESSAGE);
+                // joinSession()이 응답 대기 동안 에디터를 잠가뒀음 — 실패 시 복원.
+                // 이전에 다른 세션에 참여 중이었다면 편집 가능 상태로 되돌리고,
+                // 로비 상태(currentSessionId == null)였다면 그대로 read-only 유지.
+                if (currentSessionId != null) {
+                    editorArea.setEditable(true);
+                }
                 return;
             }
 
