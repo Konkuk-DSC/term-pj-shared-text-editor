@@ -63,6 +63,8 @@ public class LockManager {
 
     private final Timer timeoutTimer = new Timer("LockTimeout", true);
     private final long timeoutMillis;
+    /** shutdown 이후 timer.schedule을 호출하지 않도록 보호하는 플래그. synchronized(this) 보호. */
+    private boolean shutdown = false;
 
     public LockManager(String myUserId, MessageSender sender, LockListener listener) {
         this(myUserId, sender, listener, DEFAULT_TIMEOUT_MS);
@@ -143,6 +145,7 @@ public class LockManager {
      * 혼자 있는 세션이면 즉시 잠금 획득 처리한다.
      */
     public synchronized void requestLock(int regionId) {
+        if (shutdown) return; // shutdown 이후 새 요청 거부 (Timer cancelled state 회피)
         RegionRecord rec = regions.computeIfAbsent(regionId, k -> new RegionRecord());
         if (rec.state == State.REQUESTED || rec.state == State.HELD) {
             return;
@@ -322,14 +325,18 @@ public class LockManager {
         peers.clear();
     }
 
-    /** 종료 시 호출 — timer 스레드 정리. */
-    public void shutdown() {
-        timeoutTimer.cancel();
-        synchronized (this) {
-            for (RegionRecord rec : regions.values()) {
-                if (rec.timeoutTask != null) rec.timeoutTask.cancel();
-            }
-            regions.clear();
+    /**
+     * 종료 시 호출 — timer 스레드 정리.
+     * idempotent하게 동작하며, shutdown 플래그를 먼저 설정하여
+     * 이후 requestLock의 timer.schedule()이 호출되지 않도록 보호한다.
+     */
+    public synchronized void shutdown() {
+        if (shutdown) return;
+        shutdown = true;
+        for (RegionRecord rec : regions.values()) {
+            if (rec.timeoutTask != null) rec.timeoutTask.cancel();
         }
+        regions.clear();
+        timeoutTimer.cancel();
     }
 }

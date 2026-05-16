@@ -340,6 +340,7 @@ public class MainFrame extends JFrame {
             } finally {
                 isRemoteChange = false;
             }
+            rebindLockAfterRemoteChange();
         });
     }
 
@@ -354,6 +355,7 @@ public class MainFrame extends JFrame {
             } finally {
                 isRemoteChange = false;
             }
+            rebindLockAfterRemoteChange();
         });
     }
 
@@ -369,7 +371,31 @@ public class MainFrame extends JFrame {
             } finally {
                 isRemoteChange = false;
             }
+            rebindLockAfterRemoteChange();
         });
+    }
+
+    /**
+     * Phase 7 버그 수정 — 원격 편집으로 인해 내 커서의 줄 번호가 shift되었는지 확인하고
+     * lock을 재바인딩한다. CaretListener는 isRemoteChange 가드로 skip되므로 직접 처리해야 한다.
+     *
+     * 예: 줄 5에 잠금 보유 중 + 누군가 내 커서 이전 offset에 "\n"을 삽입 →
+     *     내 커서가 줄 6으로 자동 이동했지만 currentLine은 stale 상태로 5로 남음 →
+     *     줄 6에서 입력 시도하면 DocumentFilter가 차단.
+     */
+    private void rebindLockAfterRemoteChange() {
+        if (currentSessionId == null) return;
+        int newLine;
+        try {
+            newLine = editorArea.getLineOfOffset(editorArea.getCaretPosition());
+        } catch (BadLocationException ex) {
+            return;
+        }
+        if (newLine == currentLine) return;
+        int oldLine = currentLine;
+        currentLine = newLine;
+        if (oldLine >= 0) lockManager.releaseLock(oldLine);
+        lockManager.requestLock(newLine);
     }
 
     // ── 세션 관리 수신 (Phase 5.3) ──
@@ -435,6 +461,17 @@ public class MainFrame extends JFrame {
                 // 로비 상태(currentSessionId == null)였다면 그대로 read-only 유지.
                 if (currentSessionId != null) {
                     editorArea.setEditable(true);
+                    // Phase 7 — joinSession()이 currentLine=-1로 만들었으므로 현재 커서 위치의
+                    // 줄에 대해 lock을 재획득해야 한다. CaretListener의 newLine==currentLine 단락 평가가
+                    // 같은 줄이라 발동하지 않으므로 명시적으로 트리거.
+                    int line;
+                    try {
+                        line = editorArea.getLineOfOffset(editorArea.getCaretPosition());
+                    } catch (BadLocationException ex) {
+                        line = 0;
+                    }
+                    currentLine = line;
+                    lockManager.requestLock(line);
                 }
                 return;
             }
@@ -502,6 +539,14 @@ public class MainFrame extends JFrame {
     }
 
     private void joinSession(String sessionId) {
+        // Phase 7 버그 수정 — SESSION_JOIN을 보내기 전에 OLD 세션의 잠금을 해제해야 한다.
+        // 서버는 SESSION_JOIN을 처리하면서 즉시 currentSessionId를 새 세션으로 갱신하므로,
+        // 응답 수신 후 release를 보내면 LOCK_RELEASE/deferred reply가 NEW 세션 참여자에게
+        // 잘못 라우팅되고, OLD 세션의 대기 중인 요청자는 5초 timeout으로 강제 grant된다.
+        if (currentLine >= 0 && currentSessionId != null) {
+            lockManager.releaseLock(currentLine);
+            currentLine = -1;
+        }
         // 응답 도착 전 사이 입력으로 인한 race를 막기 위해 에디터를 잠시 잠근다.
         editorArea.setEditable(false);
         Message msg = new Message(MessageType.SESSION_JOIN, userId);
@@ -512,6 +557,11 @@ public class MainFrame extends JFrame {
     public void handleDisconnected() {
         SwingUtilities.invokeLater(() -> {
             setStatus("Disconnected from server.");
+            // Phase 7 — 끊긴 후 사용자가 에디터를 만지면 CaretListener가 cancelled timer에 schedule을 시도해
+            // 예외가 나거나 lock 상태가 망가질 수 있다. 모든 인터랙션을 차단한다.
+            editorArea.setEditable(false);
+            currentSessionId = null;
+            currentLine = -1;
             lockManager.shutdown();
             JOptionPane.showMessageDialog(this,
                     "Lost connection to server.",

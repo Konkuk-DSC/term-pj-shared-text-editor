@@ -252,6 +252,30 @@ class LockManagerTest {
     }
 
     @Test
+    void requestLockAfterShutdownIsNoop() {
+        // 회귀 테스트 — shutdown 후 requestLock이 cancelled timer에 schedule을 시도해
+        // IllegalStateException을 던지는 버그 (Bug A) 방지
+        TestSender sender = new TestSender();
+        TestListener listener = new TestListener();
+        LockManager lm = new LockManager("alice", sender, listener, 100);
+        lm.setPeers(Arrays.asList("bob"));
+
+        lm.shutdown();
+
+        // shutdown 이후 requestLock은 조용히 무시되어야 한다 (예외 X)
+        assertDoesNotThrow(() -> lm.requestLock(0));
+        assertFalse(lm.holds(0));
+    }
+
+    @Test
+    void shutdownIsIdempotent() {
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.shutdown();
+        assertDoesNotThrow(lm::shutdown, "shutdown 중복 호출 안전");
+    }
+
+    @Test
     void releaseDuringRequestedSendsDeferredReplies() {
         TestSender sender = new TestSender();
         LockManager lm = new LockManager("alice", sender, new TestListener());
