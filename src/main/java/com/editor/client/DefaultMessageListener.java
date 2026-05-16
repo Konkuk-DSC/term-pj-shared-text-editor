@@ -144,6 +144,32 @@ public class DefaultMessageListener implements MessageListener {
         // Phase 8에서 상세 구현
     }
 
+    // ── Phase 7: 분산 mutex ──
+
+    @Override
+    public void onLockRequest(Message msg) {
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleLockRequest(msg);
+        }
+    }
+
+    @Override
+    public void onLockReply(Message msg) {
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleLockReply(msg);
+        }
+    }
+
+    @Override
+    public void onLockRelease(Message msg) {
+        MainFrame mainFrame = getMainFrame();
+        if (mainFrame != null) {
+            mainFrame.handleLockRelease(msg);
+        }
+    }
+
     @Override
     public void onDisconnected() {
         System.out.println("[DISCONNECTED] Connection to server lost.");

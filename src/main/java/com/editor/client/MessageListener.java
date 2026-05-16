@@ -36,6 +36,13 @@ public interface MessageListener {
 
     void onSelection(Message msg);
 
+    // Phase 7 — 분산 동시성 제어 (Ricart-Agrawala)
+    void onLockRequest(Message msg);
+
+    void onLockReply(Message msg);
+
+    void onLockRelease(Message msg);
+
     /** 서버와의 연결이 끊어졌을 때 호출 */
     void onDisconnected();
 }

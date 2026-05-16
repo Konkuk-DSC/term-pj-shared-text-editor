@@ -93,6 +93,17 @@ public class MessageReceiver implements Runnable {
                 listener.onSelection(msg);
                 break;
 
+            // Phase 7 — 분산 동시성 제어
+            case LOCK_REQUEST:
+                listener.onLockRequest(msg);
+                break;
+            case LOCK_REPLY:
+                listener.onLockReply(msg);
+                break;
+            case LOCK_RELEASE:
+                listener.onLockRelease(msg);
+                break;
+
             default:
                 System.out.println("[RECV] Unhandled message: " + msg.getType());
                 break;

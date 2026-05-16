@@ -2,6 +2,9 @@ package com.editor.client;
 
 import com.editor.common.Message;
 import com.editor.common.MessageType;
+import com.editor.common.payload.LockReply;
+import com.editor.common.payload.LockRelease;
+import com.editor.common.payload.LockRequest;
 import com.editor.common.payload.SessionCreateRequest;
 import com.editor.common.payload.SessionCreateResponse;
 import com.editor.common.payload.SessionInfo;
@@ -16,7 +19,10 @@ import com.editor.common.payload.UserEvent;
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -48,9 +54,33 @@ public class MainFrame extends JFrame {
     private volatile String currentSessionId; // Phase 5.4 — null이면 로비 상태
     private volatile String currentSessionName;
 
+    // Phase 7 — 분산 mutex
+    private final LockManager lockManager;
+    private volatile int currentLine = -1; // 현재 커서가 위치한 줄 (잠금 단위)
+    private volatile long lockBlockNotifyAt = 0; // 잠금 차단 알림 throttling용
+
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
         this.client = client;
         this.userId = userId;
+        this.lockManager = new LockManager(
+                userId,
+                client::send,
+                new LockManager.LockListener() {
+                    @Override
+                    public void onLockAcquired(int regionId) {
+                        SwingUtilities.invokeLater(() -> {
+                            if (regionId == currentLine && currentSessionId != null) {
+                                setStatus("Lock acquired — you can edit line " + (regionId + 1));
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onLockTimeout(int regionId) {
+                        SwingUtilities.invokeLater(() ->
+                                setStatus("Line " + (regionId + 1) + ": peer reply timeout — forced grant"));
+                    }
+                });
         initUI(onlineUsers);
         requestSessionList();
     }
@@ -66,6 +96,11 @@ public class MainFrame extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                // 보유 중인 잠금이 있다면 해제 (Phase 7)
+                if (currentLine >= 0 && currentSessionId != null) {
+                    lockManager.releaseLock(currentLine);
+                }
+                lockManager.shutdown();
                 // LOGOUT message to server
                 Message logoutMsg = new Message(MessageType.LOGOUT, userId);
                 client.send(logoutMsg);
@@ -191,6 +226,28 @@ public class MainFrame extends JFrame {
 
         // Phase 5.4 — 세션에 참여하기 전에는 편집 불가 (로비 상태)
         editorArea.setEditable(false);
+
+        // Phase 7 — DocumentFilter로 잠금 미보유 편집 차단.
+        // 원격 변경(isRemoteChange == true)은 항상 통과시킨다.
+        ((AbstractDocument) editorArea.getDocument()).setDocumentFilter(new LockingDocumentFilter());
+
+        // Phase 7 — 커서 이동(줄 변경) 시 자동으로 잠금 release/request
+        editorArea.addCaretListener(e -> {
+            if (isRemoteChange) return;
+            if (currentSessionId == null) return;
+            int dot = e.getDot();
+            int newLine;
+            try {
+                newLine = editorArea.getLineOfOffset(dot);
+            } catch (BadLocationException ex) {
+                return;
+            }
+            if (newLine == currentLine) return;
+            int oldLine = currentLine;
+            currentLine = newLine;
+            if (oldLine >= 0) lockManager.releaseLock(oldLine);
+            lockManager.requestLock(newLine);
+        });
 
         editorArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
@@ -342,6 +399,16 @@ public class MainFrame extends JFrame {
                 sessionListModel.addElement(display);
             }
             updateJoinButtonState();
+
+            // Phase 7 — 현재 참여 중인 세션의 참여자 목록이 바뀌었을 수 있으니 LockManager에 반영
+            if (currentSessionId != null) {
+                for (SessionInfo info : currentSessions) {
+                    if (currentSessionId.equals(info.getSessionId()) && info.getParticipants() != null) {
+                        lockManager.setPeers(info.getParticipants());
+                        break;
+                    }
+                }
+            }
         });
     }
 
@@ -372,8 +439,20 @@ public class MainFrame extends JFrame {
                 return;
             }
 
+            // Phase 7 — 이전 세션의 잠금 상태 정리
+            if (currentLine >= 0 && currentSessionId != null) {
+                lockManager.releaseLock(currentLine);
+            }
+            lockManager.reset();
+            currentLine = -1;
+
             currentSessionId = resp.getSessionId();
             currentSessionName = resp.getSessionName();
+
+            // Phase 7 — 새 세션 참여자로 peer 초기화
+            if (resp.getParticipants() != null) {
+                lockManager.setPeers(resp.getParticipants());
+            }
 
             // 서버가 보낸 세션 내용으로 에디터 교체. 원격 변경 플래그로 DocumentListener 재전송 차단.
             try {
@@ -396,6 +475,16 @@ public class MainFrame extends JFrame {
             updateJoinButtonState();
             // 새로 참여한 세션 항목에 ★ 표시
             refreshSessionListDisplay();
+
+            // Phase 7 — 커서가 있는 줄에 대해 잠금 요청 트리거
+            int initialLine;
+            try {
+                initialLine = editorArea.getLineOfOffset(editorArea.getCaretPosition());
+            } catch (BadLocationException ex) {
+                initialLine = 0;
+            }
+            currentLine = initialLine;
+            lockManager.requestLock(initialLine);
         });
     }
 
@@ -423,10 +512,97 @@ public class MainFrame extends JFrame {
     public void handleDisconnected() {
         SwingUtilities.invokeLater(() -> {
             setStatus("Disconnected from server.");
+            lockManager.shutdown();
             JOptionPane.showMessageDialog(this,
                     "Lost connection to server.",
                     "Disconnected", JOptionPane.WARNING_MESSAGE);
         });
+    }
+
+    // ── Phase 7: 분산 mutex 메시지 수신 ──
+
+    public void handleLockRequest(Message msg) {
+        LockRequest payload = msg.getPayloadAs(LockRequest.class);
+        String from = msg.getSender();
+        lockManager.onLockRequest(from, payload.getRegionId(), payload.getTimestamp());
+    }
+
+    public void handleLockReply(Message msg) {
+        LockReply payload = msg.getPayloadAs(LockReply.class);
+        lockManager.onLockReply(msg.getSender(), payload.getRegionId(),
+                payload.getRequestTimestamp(), payload.getRequestSender());
+    }
+
+    public void handleLockRelease(Message msg) {
+        LockRelease payload = msg.getPayloadAs(LockRelease.class);
+        lockManager.onLockRelease(msg.getSender(), payload.getRegionId());
+    }
+
+    /**
+     * Phase 7 — 잠금 미보유 시 편집을 차단하는 DocumentFilter.
+     *
+     * - isRemoteChange == true: 원격 편집 적용 중 — 항상 통과
+     * - 로비 상태(currentSessionId == null): 에디터가 read-only라 도달 안 함, 안전상 차단
+     * - 해당 offset이 속한 줄에 대해 잠금을 보유 중이면 통과, 아니면 silently drop + status bar 안내
+     */
+    private class LockingDocumentFilter extends DocumentFilter {
+        @Override
+        public void insertString(FilterBypass fb, int offset, String text, AttributeSet attr) throws BadLocationException {
+            if (allow(offset)) {
+                fb.insertString(offset, text, attr);
+            } else {
+                notifyBlocked(offset);
+            }
+        }
+
+        @Override
+        public void remove(FilterBypass fb, int offset, int length) throws BadLocationException {
+            if (allow(offset)) {
+                fb.remove(offset, length);
+            } else {
+                notifyBlocked(offset);
+            }
+        }
+
+        @Override
+        public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs) throws BadLocationException {
+            if (allow(offset)) {
+                fb.replace(offset, length, text, attrs);
+            } else {
+                notifyBlocked(offset);
+            }
+        }
+
+        private boolean allow(int offset) {
+            if (isRemoteChange) return true;
+            if (currentSessionId == null) return false;
+            int line;
+            try {
+                line = editorArea.getLineOfOffset(offset);
+            } catch (BadLocationException ex) {
+                return false;
+            }
+            return lockManager.holds(line);
+        }
+
+        private void notifyBlocked(int offset) {
+            // 자주 호출되므로 1초당 한 번 정도로 throttle
+            long now = System.currentTimeMillis();
+            if (now - lockBlockNotifyAt < 1000) return;
+            lockBlockNotifyAt = now;
+            int line;
+            try {
+                line = editorArea.getLineOfOffset(offset);
+            } catch (BadLocationException ex) {
+                return;
+            }
+            LockManager.State st = lockManager.getState(line);
+            String reason = (st == LockManager.State.REQUESTED)
+                    ? "acquiring lock"
+                    : "locked by another user";
+            setStatus("Line " + (line + 1) + " " + reason + " — wait...");
+            Toolkit.getDefaultToolkit().beep();
+        }
     }
 
     private void setStatus(String text) {

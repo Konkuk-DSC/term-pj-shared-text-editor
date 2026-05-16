@@ -388,20 +388,44 @@ public class ClientHandler implements Runnable {
         List<Session> all = server.getSessionStore().list();
         List<SessionInfo> infos = new ArrayList<>(all.size());
         for (Session s : all) {
+            // Phase 7 — LockManager의 peer 집합 갱신을 위해 참여자 목록도 포함
+            List<String> participants = new ArrayList<>(s.getParticipants());
             infos.add(new SessionInfo(
                     s.getSessionId(),
                     s.getSessionName(),
                     s.getParticipantCount(),
-                    s.getLastModifiedAt()));
+                    s.getLastModifiedAt(),
+                    participants));
         }
         return infos;
     }
 
-    // ── 동시성 제어 처리 ──
+    // ── 동시성 제어 처리 (Phase 7) ──
 
+    /**
+     * Phase 7 — LOCK_REQUEST / LOCK_REPLY / LOCK_RELEASE 메시지를
+     * 같은 세션 참여자에게 중계한다. 서버는 알고리즘에 관여하지 않고 단순 릴레이로만 동작한다.
+     *
+     * - 미인증 또는 세션 미참여 클라이언트의 lock 메시지는 무시한다.
+     * - 송신자는 broadcast 대상에서 제외한다.
+     * - reply는 모두에게 보내고 수신측이 자기 대상인지 필터링한다(LockReply.requestSender 확인).
+     */
     private void handleLock(Message msg) {
-        // TODO: Phase 7에서 구현
-        System.out.println("[LOCK] " + msg.getType() + " from " + userId);
+        String uid = this.userId;
+        if (uid == null) return;
+
+        String sid = this.currentSessionId;
+        if (sid == null) {
+            System.out.println("[LOCK IGNORED] " + uid + " is not in any session");
+            return;
+        }
+        Session session = server.getSessionStore().get(sid);
+        if (session == null) {
+            this.currentSessionId = null;
+            return;
+        }
+
+        server.broadcastToSession(session, msg, uid);
     }
 
     // ── 실시간 편집 과정 처리 ──
