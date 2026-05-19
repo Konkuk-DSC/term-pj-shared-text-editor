@@ -425,7 +425,12 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        server.broadcastToSession(session, msg, uid);
+        // Phase 7.7 — LOCK_* 와 TEXT_* 를 같은 lock으로 직렬화한다.
+        // 그렇지 않으면 서로 다른 클라이언트가 두 종류 메시지를 다른 순서로 받게 되어,
+        // 줄 추가/삭제로 인한 region id shift가 클라이언트별로 어긋난다.
+        synchronized (session.getBuffer()) {
+            server.broadcastToSession(session, msg, uid);
+        }
     }
 
     // ── 실시간 편집 과정 처리 ──

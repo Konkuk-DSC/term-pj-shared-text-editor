@@ -22,15 +22,19 @@ import javax.swing.event.DocumentListener;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
+import javax.swing.text.DefaultHighlighter;
 import javax.swing.text.DocumentFilter;
+import javax.swing.text.Highlighter;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 메인 화면 — 접속자 목록 + 에디터 영역(Phase 4에서 추가).
@@ -59,6 +63,22 @@ public class MainFrame extends JFrame {
     private volatile int currentLine = -1; // 현재 커서가 위치한 줄 (잠금 단위)
     private volatile long lockBlockNotifyAt = 0; // 잠금 차단 알림 throttling용
 
+    // Phase 7.6 — 잠금 상태 시각화
+    /** Highlighter.addHighlight()가 반환한 tag — 다음 redraw 때 제거하기 위해 보관. */
+    private final List<Object> activeLockHighlights = new ArrayList<>();
+    /** 원격 사용자 보유/획득 중인 줄: 분홍색 (편집 차단됨을 알림) */
+    private static final DefaultHighlighter.DefaultHighlightPainter REMOTE_LOCK_PAINTER =
+            new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 210, 210));
+    /** 내가 응답 대기 중인 줄: 연노랑 */
+    private static final DefaultHighlighter.DefaultHighlightPainter MY_PENDING_PAINTER =
+            new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 245, 180));
+    /** 내가 보유 중인 줄: 연녹색 (편집 가능 표시) */
+    private static final DefaultHighlighter.DefaultHighlightPainter MY_HELD_PAINTER =
+            new DefaultHighlighter.DefaultHighlightPainter(new Color(220, 245, 220));
+
+    // Phase 7.7 — 줄 추가/삭제로 인한 region id shift 추적
+    private int lastLineCount = 1; // 빈 Document는 line count = 1
+
     public MainFrame(ClientMain client, String userId, List<String> onlineUsers) {
         this.client = client;
         this.userId = userId;
@@ -79,6 +99,11 @@ public class MainFrame extends JFrame {
                     public void onLockTimeout(int regionId) {
                         SwingUtilities.invokeLater(() ->
                                 setStatus("Line " + (regionId + 1) + ": peer reply timeout — forced grant"));
+                    }
+
+                    @Override
+                    public void onLockStateChanged() {
+                        SwingUtilities.invokeLater(MainFrame.this::redrawLockHighlights);
                     }
                 });
         initUI(onlineUsers);
@@ -218,7 +243,34 @@ public class MainFrame extends JFrame {
         add(sessionPanel, BorderLayout.WEST);
 
         // ── 에디터 영역 (중앙) ──
-        editorArea = new JTextArea();
+        // Phase 7.6 — getToolTipText를 override해서 hover 시 잠금 보유자 표시
+        editorArea = new JTextArea() {
+            @Override
+            public String getToolTipText(MouseEvent event) {
+                int offset = viewToModel2D(event.getPoint());
+                if (offset < 0) return null;
+                int line;
+                try {
+                    line = getLineOfOffset(offset);
+                } catch (BadLocationException ex) {
+                    return null;
+                }
+                String holder = lockManager.getRemoteHolder(line);
+                if (holder != null) {
+                    return "Line " + (line + 1) + ": locked by " + holder;
+                }
+                LockManager.State myState = lockManager.getState(line);
+                if (myState == LockManager.State.HELD) {
+                    return "Line " + (line + 1) + ": held by you";
+                }
+                if (myState == LockManager.State.REQUESTED) {
+                    return "Line " + (line + 1) + ": acquiring lock...";
+                }
+                return null;
+            }
+        };
+        // 짧은 hover 후 툴팁이 뜨도록 등록
+        ToolTipManager.sharedInstance().registerComponent(editorArea);
         editorArea.setFont(new Font("Monospaced", Font.PLAIN, 14));
         editorArea.setLineWrap(true);
         editorArea.setWrapStyleWord(true);
@@ -252,6 +304,7 @@ public class MainFrame extends JFrame {
         editorArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
+                trackLineShift(e); // Phase 7.7 — 항상 (로컬/원격 모두) 호출
                 if (isRemoteChange) return;
                 int offset = e.getOffset();
                 int length = e.getLength();
@@ -272,6 +325,7 @@ public class MainFrame extends JFrame {
 
             @Override
             public void removeUpdate(DocumentEvent e) {
+                trackLineShift(e);
                 if (isRemoteChange) return;
                 int offset = e.getOffset();
                 int length = e.getLength();
@@ -383,6 +437,82 @@ public class MainFrame extends JFrame {
      *     내 커서가 줄 6으로 자동 이동했지만 currentLine은 stale 상태로 5로 남음 →
      *     줄 6에서 입력 시도하면 DocumentFilter가 차단.
      */
+    /**
+     * Phase 7.7 — DocumentListener에서 호출. 줄 개수가 바뀌었으면 LockManager에 shift를 알려
+     * 내 상태와 원격 holders 맵의 region id를 조정한다. 모든 클라이언트가 같은 텍스트 이벤트를
+     * 같은 순서로 받으므로 같은 shift가 적용되어 일관성이 유지된다.
+     */
+    private void trackLineShift(DocumentEvent e) {
+        int newCount = editorArea.getLineCount();
+        int delta = newCount - lastLineCount;
+        lastLineCount = newCount;
+        if (delta == 0) return;
+        int changeLine;
+        try {
+            changeLine = editorArea.getLineOfOffset(e.getOffset());
+        } catch (BadLocationException ex) {
+            return;
+        }
+        lockManager.shiftRegions(changeLine, delta);
+    }
+
+    /**
+     * Phase 7.6 — 잠금 상태를 줄 배경색으로 시각화.
+     *  - 원격 사용자가 보유/획득 중인 줄: 분홍색
+     *  - 내가 보유 중인 줄: 연녹색
+     *  - 내가 응답 대기 중인 줄: 연노랑
+     * onLockStateChanged 리스너 콜백에서 invokeLater로 호출됨 (EDT 보장).
+     */
+    private void redrawLockHighlights() {
+        Highlighter h = editorArea.getHighlighter();
+        for (Object tag : activeLockHighlights) {
+            h.removeHighlight(tag);
+        }
+        activeLockHighlights.clear();
+
+        if (currentSessionId == null) return;
+        int totalLines = editorArea.getLineCount();
+
+        // 원격 잠금 영역
+        Map<Integer, String> remote = lockManager.getRemoteHoldersSnapshot();
+        for (int regionId : remote.keySet()) {
+            if (regionId < 0 || regionId >= totalLines) continue;
+            // 내가 들고 있는 줄에는 내 색을 우선 (아래에서 다시 칠함)
+            if (regionId == currentLine) {
+                LockManager.State myState = lockManager.getState(regionId);
+                if (myState == LockManager.State.HELD || myState == LockManager.State.REQUESTED) continue;
+            }
+            paintLine(h, regionId, REMOTE_LOCK_PAINTER);
+        }
+
+        // 내 상태
+        if (currentLine >= 0 && currentLine < totalLines) {
+            LockManager.State myState = lockManager.getState(currentLine);
+            if (myState == LockManager.State.HELD) {
+                paintLine(h, currentLine, MY_HELD_PAINTER);
+            } else if (myState == LockManager.State.REQUESTED) {
+                paintLine(h, currentLine, MY_PENDING_PAINTER);
+            }
+        }
+    }
+
+    private void paintLine(Highlighter h, int line, DefaultHighlighter.DefaultHighlightPainter painter) {
+        try {
+            int start = editorArea.getLineStartOffset(line);
+            int end = editorArea.getLineEndOffset(line);
+            // 빈 줄도 시각화될 수 있도록 end >= start 보장
+            if (end > start) {
+                Object tag = h.addHighlight(start, end, painter);
+                activeLockHighlights.add(tag);
+            } else if (end == start) {
+                // 마지막 빈 줄: addHighlight(start, start)는 invisible — skip하거나 +1로 확장
+                // 단순 skip
+            }
+        } catch (BadLocationException ex) {
+            // 줄이 사라진 경우 무시
+        }
+    }
+
     private void rebindLockAfterRemoteChange() {
         if (currentSessionId == null) return;
         int newLine;
@@ -563,6 +693,8 @@ public class MainFrame extends JFrame {
             currentSessionId = null;
             currentLine = -1;
             lockManager.shutdown();
+            // Phase 7.6 — shutdown은 notifyStateChanged를 호출하지 않으므로 명시적으로 highlight 제거
+            redrawLockHighlights();
             JOptionPane.showMessageDialog(this,
                     "Lost connection to server.",
                     "Disconnected", JOptionPane.WARNING_MESSAGE);
@@ -598,7 +730,8 @@ public class MainFrame extends JFrame {
     private class LockingDocumentFilter extends DocumentFilter {
         @Override
         public void insertString(FilterBypass fb, int offset, String text, AttributeSet attr) throws BadLocationException {
-            if (allow(offset)) {
+            // 삽입은 시작 줄만 보유하면 OK — 새로 생기는 줄은 내가 만드는 것이므로 안전.
+            if (allowRange(offset, 0)) {
                 fb.insertString(offset, text, attr);
             } else {
                 notifyBlocked(offset);
@@ -607,7 +740,8 @@ public class MainFrame extends JFrame {
 
         @Override
         public void remove(FilterBypass fb, int offset, int length) throws BadLocationException {
-            if (allow(offset)) {
+            // Phase 7.7 — 다중 줄 삭제 시 모든 영향 라인을 보유해야 한다.
+            if (allowRange(offset, length)) {
                 fb.remove(offset, length);
             } else {
                 notifyBlocked(offset);
@@ -616,23 +750,35 @@ public class MainFrame extends JFrame {
 
         @Override
         public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs) throws BadLocationException {
-            if (allow(offset)) {
+            // replace = remove + insert. 삭제 범위 안의 모든 라인이 우리 것이어야 한다.
+            if (allowRange(offset, length)) {
                 fb.replace(offset, length, text, attrs);
             } else {
                 notifyBlocked(offset);
             }
         }
 
-        private boolean allow(int offset) {
+        /**
+         * [offset, offset+length] 구간이 모두 우리가 보유한 라인 안에 있는지 검사한다.
+         * length == 0이면 시작 라인만 검사 (insert).
+         */
+        private boolean allowRange(int offset, int length) {
             if (isRemoteChange) return true;
             if (currentSessionId == null) return false;
-            int line;
+            int startLine, endLine;
             try {
-                line = editorArea.getLineOfOffset(offset);
+                startLine = editorArea.getLineOfOffset(offset);
+                int endOffset = (length > 0) ? offset + length - 1 : offset;
+                int docLen = editorArea.getDocument().getLength();
+                if (endOffset > docLen) endOffset = docLen;
+                endLine = editorArea.getLineOfOffset(endOffset);
             } catch (BadLocationException ex) {
                 return false;
             }
-            return lockManager.holds(line);
+            for (int line = startLine; line <= endLine; line++) {
+                if (!lockManager.holds(line)) return false;
+            }
+            return true;
         }
 
         private void notifyBlocked(int offset) {

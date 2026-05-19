@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,6 +50,11 @@ public class LockManager {
         void onLockAcquired(int regionId);
         /** timeout으로 강제 grant 발생 — 진단/UI 알림용 */
         void onLockTimeout(int regionId);
+        /**
+         * Phase 7.6 — 잠금 상태(내 state 또는 remoteHolders)가 변했음을 알림.
+         * UI redraw 트리거 용도. 기본 구현은 no-op이라 테스트는 영향 없음.
+         */
+        default void onLockStateChanged() {}
     }
 
     private final String myUserId;
@@ -60,6 +66,13 @@ public class LockManager {
     private final Map<Integer, RegionRecord> regions = new HashMap<>();
     /** 같은 세션 참여자 집합 (자기 자신 제외). expectedReplies 계산용. */
     private final Set<String> peers = new HashSet<>();
+    /**
+     * Phase 7.6 — 원격 사용자가 보유/획득 중인 영역. regionId → userId.
+     * LOCK_REQUEST 수신 시 갱신, LOCK_RELEASE 수신 시 정리, peer 이탈 시 정리.
+     * 정확한 알고리즘 상태가 아니라 UI 시각화용 근사치이지만, 발신/수신/이탈 이벤트로
+     * 충분히 일관성을 유지한다.
+     */
+    private final Map<Integer, String> remoteHolders = new HashMap<>();
 
     private final Timer timeoutTimer = new Timer("LockTimeout", true);
     private final long timeoutMillis;
@@ -107,8 +120,18 @@ public class LockManager {
                 if (!myUserId.equals(p)) peers.add(p);
             }
         }
+        // Phase 7.7 — peer가 떠나면 그 사용자가 보유 중이던 원격 잠금도 즉시 무효화
+        boolean remoteChanged = false;
+        Iterator<Map.Entry<Integer, String>> it = remoteHolders.entrySet().iterator();
+        while (it.hasNext()) {
+            if (!peers.contains(it.next().getValue())) {
+                it.remove();
+                remoteChanged = true;
+            }
+        }
         // peer가 떠난 경우: 대기 중이던 요청이 있다면 응답한 것으로 간주
         autoGrantForMissingPeers();
+        if (remoteChanged) notifyStateChanged();
     }
 
     /**
@@ -154,6 +177,7 @@ public class LockManager {
         rec.requestTimestamp = clock.tick();
         rec.expectedReplies = peers.size();
         rec.repliedUsers.clear();
+        notifyStateChanged(); // UI에 REQUESTED 상태 반영
 
         if (rec.expectedReplies == 0) {
             // 혼자인 경우 즉시 획득
@@ -209,6 +233,7 @@ public class LockManager {
             msg.setPayloadFromObject(new LockRelease(regionId));
             sender.send(msg);
         }
+        notifyStateChanged();
     }
 
     // ── 외부 API: 수신 메시지 처리 ──
@@ -220,8 +245,18 @@ public class LockManager {
 
         RegionRecord rec = regions.computeIfAbsent(regionId, k -> new RegionRecord());
 
+        // Phase 7.6 — UI 표시용으로 "이 영역에 관심 있는 원격 사용자"를 기록.
+        // 우리가 HELD인 경우엔 우리가 진짜 보유자이므로 표시하지 않음 (UI는 우리 상태를 우선 표시).
+        // REQUESTED인 경우엔 누가 이길지 모르므로 임시로 기록 — 우리가 이기면 promoteToHeld에서 제거됨.
+        boolean remoteChanged = false;
+        if (rec.state != State.HELD) {
+            String prev = remoteHolders.put(regionId, fromUserId);
+            remoteChanged = !fromUserId.equals(prev);
+        }
+
         if (rec.state == State.NOT_INTERESTED) {
             sendReply(regionId, ts, fromUserId);
+            if (remoteChanged) notifyStateChanged();
             return;
         }
 
@@ -240,31 +275,49 @@ public class LockManager {
             // 내가 우선 → defer
             rec.deferred.add(new Deferred(fromUserId, ts));
         }
+        if (remoteChanged) notifyStateChanged();
     }
 
-    /** LOCK_REPLY 수신. requestSender가 나와 일치할 때만 처리. */
+    /**
+     * LOCK_REPLY 수신. requestSender가 나와 일치할 때만 처리.
+     *
+     * Phase 7.7 — 내가 LOCK_REQUEST를 보낸 뒤 줄 추가/삭제로 인해 내 regionId가 shift됐다면,
+     * reply의 regionId(원래 보낸 값)와 내 현재 regions 키가 어긋난다.
+     * 그러므로 regionId가 아니라 `requestTimestamp`로 보류 중인 요청을 찾는다.
+     * Lamport tick은 단조 증가하므로 alice의 REQUESTED 레코드 중 ts가 같은 건 최대 1개.
+     */
     public synchronized void onLockReply(String fromUserId, int regionId, long requestTs, String requestSender) {
         if (!myUserId.equals(requestSender)) return; // 내 요청에 대한 reply가 아님
         if (myUserId.equals(fromUserId)) return;     // 자기 자신 echo 방지
 
-        RegionRecord rec = regions.get(regionId);
-        if (rec == null) return;
-        if (rec.state != State.REQUESTED) return;
-        if (rec.requestTimestamp != requestTs) return; // stale (이전 요청에 대한 reply)
+        RegionRecord rec = null;
+        int actualRegionId = -1;
+        for (Map.Entry<Integer, RegionRecord> e : regions.entrySet()) {
+            RegionRecord r = e.getValue();
+            if (r.state == State.REQUESTED && r.requestTimestamp == requestTs) {
+                rec = r;
+                actualRegionId = e.getKey();
+                break;
+            }
+        }
+        if (rec == null) return; // 해당 요청을 더 이상 추적하지 않음 (이미 취소/완료됨)
 
         if (rec.repliedUsers.add(fromUserId)) {
             if (rec.repliedUsers.size() >= rec.expectedReplies) {
-                promoteToHeld(regionId, rec);
+                promoteToHeld(actualRegionId, rec);
             }
         }
     }
 
     /**
      * LOCK_RELEASE 수신. R-A에서는 deferred reply로 이양이 일어나므로 알고리즘적으로는 no-op.
-     * 향후 UI 표시(다른 사용자의 영역이 풀렸음을 시각화)에 활용 가능.
+     * Phase 7.6에서 UI 표시(원격 잠금 해제 시각화)를 위해 remoteHolders 정리.
      */
     public synchronized void onLockRelease(String fromUserId, int regionId) {
-        // 현재는 no-op
+        if (fromUserId.equals(remoteHolders.get(regionId))) {
+            remoteHolders.remove(regionId);
+            notifyStateChanged();
+        }
     }
 
     // ── 내부 헬퍼 ──
@@ -276,16 +329,24 @@ public class LockManager {
     }
 
     private void handleTimeout(int regionId, long requestTs) {
-        RegionRecord rec;
+        // Phase 7.7 — onLockReply와 동일하게 requestTs로 찾는다 (shift 후 regionId가 다를 수 있음).
+        int actualRegionId = -1;
         synchronized (this) {
-            rec = regions.get(regionId);
-            if (rec == null || rec.state != State.REQUESTED) return;
-            if (rec.requestTimestamp != requestTs) return; // 이미 다음 요청으로 넘어감
-            System.out.println("[LOCK TIMEOUT] region=" + regionId + " — forcing grant after " + timeoutMillis + "ms");
-            promoteToHeld(regionId, rec);
+            RegionRecord rec = null;
+            for (Map.Entry<Integer, RegionRecord> e : regions.entrySet()) {
+                RegionRecord r = e.getValue();
+                if (r.state == State.REQUESTED && r.requestTimestamp == requestTs) {
+                    rec = r;
+                    actualRegionId = e.getKey();
+                    break;
+                }
+            }
+            if (rec == null) return; // 요청이 이미 취소/완료됨
+            System.out.println("[LOCK TIMEOUT] region=" + actualRegionId + " — forcing grant after " + timeoutMillis + "ms");
+            promoteToHeld(actualRegionId, rec);
         }
         // listener는 lock 밖에서 호출
-        listener.onLockTimeout(regionId);
+        listener.onLockTimeout(actualRegionId);
     }
 
     /** 잠금을 HELD로 승격하고 listener에 알린다. (synchronized 블록 안에서 호출되어야 함) */
@@ -295,7 +356,15 @@ public class LockManager {
             rec.timeoutTask.cancel();
             rec.timeoutTask = null;
         }
+        // Phase 7.6 — 내가 보유한 영역은 원격 표시에서 제거 (우리 상태가 우선)
+        remoteHolders.remove(regionId);
         listener.onLockAcquired(regionId);
+        listener.onLockStateChanged();
+    }
+
+    /** state 변화 시 UI redraw 트리거. synchronized 블록 안에서 호출. */
+    private void notifyStateChanged() {
+        listener.onLockStateChanged();
     }
 
     // ── 상태 조회 ──
@@ -323,6 +392,9 @@ public class LockManager {
         }
         regions.clear();
         peers.clear();
+        boolean hadRemote = !remoteHolders.isEmpty();
+        remoteHolders.clear();
+        if (hadRemote) notifyStateChanged();
     }
 
     /**
@@ -337,6 +409,127 @@ public class LockManager {
             if (rec.timeoutTask != null) rec.timeoutTask.cancel();
         }
         regions.clear();
+        remoteHolders.clear();
         timeoutTimer.cancel();
+    }
+
+    // ── Phase 7.6 — UI 조회 ──
+
+    /** 해당 영역을 보유/획득 중인 원격 사용자 id (없으면 null). */
+    public synchronized String getRemoteHolder(int regionId) {
+        return remoteHolders.get(regionId);
+    }
+
+    /** UI redraw용 원격 잠금 스냅샷. */
+    public synchronized Map<Integer, String> getRemoteHoldersSnapshot() {
+        return new HashMap<>(remoteHolders);
+    }
+
+    // ── Phase 7.7 — 줄 추가/삭제로 region id가 shift될 때의 lock 재조정 ──
+
+    /**
+     * 텍스트 변경으로 changeLine 이후의 줄이 delta만큼 이동했을 때,
+     * 내 상태(regions)와 원격 holders 맵의 키를 일관되게 shift한다.
+     *
+     *  - regionId <= changeLine: 그대로
+     *  - regionId > changeLine: regionId += delta
+     *  - shift 결과가 음수면 해당 영역은 사라진 것으로 보고 제거
+     *
+     * 모든 클라이언트가 같은 텍스트 이벤트를 같은 순서로 받으면 같은 shift를 수행해
+     * regionId 매핑이 일관되게 유지된다.
+     */
+    public synchronized void shiftRegions(int changeLine, int delta) {
+        if (delta == 0) return;
+
+        // regions (내 state) shift — NOT_INTERESTED 잔여는 제거하고 활성 상태만 옮긴다.
+        // shifted 여부를 별도로 기록해서 cross-map 충돌 시 책임 판정에 사용.
+        Map<Integer, RegionRecord> newRegions = new HashMap<>();
+        Set<Integer> myShiftedKeys = new HashSet<>();
+        for (Map.Entry<Integer, RegionRecord> e : regions.entrySet()) {
+            int k = e.getKey();
+            RegionRecord rec = e.getValue();
+            if (rec.state == State.NOT_INTERESTED) {
+                if (rec.timeoutTask != null) rec.timeoutTask.cancel();
+                continue;
+            }
+            int newKey = (k > changeLine) ? k + delta : k;
+            if (newKey < 0) {
+                if (rec.timeoutTask != null) rec.timeoutTask.cancel();
+                continue;
+            }
+            if (newRegions.containsKey(newKey)) {
+                if (rec.timeoutTask != null) rec.timeoutTask.cancel();
+                continue;
+            }
+            newRegions.put(newKey, rec);
+            if (newKey != k) myShiftedKeys.add(newKey);
+        }
+        regions.clear();
+        regions.putAll(newRegions);
+
+        // remoteHolders shift
+        Map<Integer, String> newRemote = new HashMap<>();
+        Set<Integer> remoteShiftedKeys = new HashSet<>();
+        for (Map.Entry<Integer, String> e : remoteHolders.entrySet()) {
+            int k = e.getKey();
+            int newKey = (k > changeLine) ? k + delta : k;
+            if (newKey < 0) continue;
+            if (newRemote.containsKey(newKey)) continue;
+            newRemote.put(newKey, e.getValue());
+            if (newKey != k) remoteShiftedKeys.add(newKey);
+        }
+        boolean remoteChanged = !newRemote.equals(remoteHolders);
+        remoteHolders.clear();
+        remoteHolders.putAll(newRemote);
+
+        // Phase 7.7 — cross-map 충돌 해소.
+        // 줄 병합 등으로 내 보유 영역과 원격 보유 영역의 키가 같아진 경우, "shift된 쪽"이 yield한다.
+        // 모든 클라이언트가 같은 텍스트 이벤트를 받으므로 같은 판정을 내려 결과가 대칭적이다.
+        // 예: alice(5 HELD, 안 shift) + bob(6 HELD → 5 shift) 충돌 시 alice는 그대로, bob은 release.
+        List<Integer> myReleases = new ArrayList<>();
+        for (Integer k : new ArrayList<>(regions.keySet())) {
+            if (!remoteHolders.containsKey(k)) continue;
+            boolean myShifted = myShiftedKeys.contains(k);
+            boolean remoteShifted = remoteShiftedKeys.contains(k);
+            if (myShifted && !remoteShifted) {
+                // 내가 shift된 쪽 — 내가 양보
+                myReleases.add(k);
+            } else if (!myShifted && remoteShifted) {
+                // 원격이 shift된 쪽 — 원격 표시만 정리
+                remoteHolders.remove(k);
+                remoteChanged = true;
+            } else {
+                // 둘 다 shift됐거나 둘 다 안 됐음 — 매우 드문 케이스, 양쪽 모두 정리
+                myReleases.add(k);
+                remoteHolders.remove(k);
+                remoteChanged = true;
+            }
+        }
+
+        for (int k : myReleases) {
+            RegionRecord rec = regions.get(k);
+            if (rec == null) continue;
+            State oldState = rec.state;
+            rec.state = State.NOT_INTERESTED;
+            rec.requestTimestamp = -1;
+            rec.expectedReplies = 0;
+            rec.repliedUsers.clear();
+            if (rec.timeoutTask != null) {
+                rec.timeoutTask.cancel();
+                rec.timeoutTask = null;
+            }
+            // deferred 큐 정리
+            for (Deferred d : rec.deferred) {
+                sendReply(k, d.requestTimestamp, d.fromUserId);
+            }
+            rec.deferred.clear();
+            if (oldState == State.HELD) {
+                Message msg = new Message(MessageType.LOCK_RELEASE, myUserId);
+                msg.setPayloadFromObject(new LockRelease(k));
+                sender.send(msg);
+            }
+        }
+
+        if (remoteChanged || !myReleases.isEmpty()) notifyStateChanged();
     }
 }

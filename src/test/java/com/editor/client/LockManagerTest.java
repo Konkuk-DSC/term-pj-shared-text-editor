@@ -275,6 +275,207 @@ class LockManagerTest {
         assertDoesNotThrow(lm::shutdown, "shutdown 중복 호출 안전");
     }
 
+    // ── Phase 7.6 / 7.7 ──
+
+    @Test
+    void remoteHolderRecordedOnRequestAndClearedOnRelease() {
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.setPeers(Arrays.asList("bob"));
+
+        assertNull(lm.getRemoteHolder(3), "초기에는 원격 보유자 없음");
+
+        lm.onLockRequest("bob", 3, 5L);
+        assertEquals("bob", lm.getRemoteHolder(3), "LOCK_REQUEST 수신 시 보유자로 기록");
+
+        lm.onLockRelease("bob", 3);
+        assertNull(lm.getRemoteHolder(3), "LOCK_RELEASE 수신 시 정리");
+    }
+
+    @Test
+    void remoteHolderClearedWhenPeerLeaves() {
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.setPeers(Arrays.asList("bob", "carol"));
+
+        lm.onLockRequest("bob", 7, 1L);
+        assertEquals("bob", lm.getRemoteHolder(7));
+
+        // bob이 세션을 떠남 → 원격 보유자에서도 제거되어야 함
+        lm.setPeers(Arrays.asList("carol"));
+        assertNull(lm.getRemoteHolder(7), "떠난 peer의 원격 잠금은 정리");
+    }
+
+    @Test
+    void promotingToHeldClearsRemoteHolderForSameRegion() {
+        // 정합성 회귀: bob이 요청해서 remoteHolders[5]=bob이 된 뒤,
+        // 우리가 같은 영역을 요청하고 즉시 획득(혼자) → remoteHolders에 stale 값이 남으면 안 됨.
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.setPeers(Arrays.asList("bob"));
+
+        lm.onLockRequest("bob", 5, 1L);
+        assertEquals("bob", lm.getRemoteHolder(5));
+
+        // bob이 떠나서 alice 혼자 남았다고 가정
+        lm.setPeers(java.util.Collections.emptyList());
+        lm.requestLock(5);
+        assertTrue(lm.holds(5));
+        assertNull(lm.getRemoteHolder(5), "내가 획득한 영역은 원격 표시에서 제거");
+    }
+
+    @Test
+    void shiftRegionsAdjustsBothMyStateAndRemoteHolders() {
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.setPeers(java.util.Collections.emptyList());
+
+        // 내 보유 영역 = 3
+        lm.requestLock(3);
+        assertTrue(lm.holds(3));
+
+        // 가짜 원격 holder 등록 (peer 추가 후 LOCK_REQUEST 수신)
+        lm.setPeers(Arrays.asList("bob"));
+        lm.onLockRequest("bob", 7, 1L);
+        assertEquals("bob", lm.getRemoteHolder(7));
+
+        // 줄 2에 1줄 삽입됨 → 줄 2 이후 영역들이 +1 shift
+        lm.shiftRegions(2, 1);
+
+        assertFalse(lm.holds(3), "regionId=3은 더 이상 보유 상태가 아님 (shifted to 4)");
+        assertTrue(lm.holds(4), "내 보유 영역이 4로 이동");
+        assertNull(lm.getRemoteHolder(7), "원격 holder도 shifted");
+        assertEquals("bob", lm.getRemoteHolder(8), "bob의 영역이 7→8로 이동");
+    }
+
+    @Test
+    void shiftRegionsBeforeChangePointLeavesEntriesAlone() {
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.setPeers(Arrays.asList("bob"));
+
+        lm.onLockRequest("bob", 1, 1L);
+        assertEquals("bob", lm.getRemoteHolder(1));
+
+        // 줄 5에 변화가 생겨도 줄 1은 안 움직임
+        lm.shiftRegions(5, 3);
+        assertEquals("bob", lm.getRemoteHolder(1));
+    }
+
+    @Test
+    void shiftCollisionShiftedSideYields() {
+        // 줄 병합 시나리오: alice는 region 6 HELD, 원격 bob은 region 5 HELD.
+        // 줄 5에서 1줄 삭제 → alice의 6 → 5 (shifted), bob의 5 → 5 (안 shifted).
+        // 충돌 — shifted된 alice가 양보해야 함.
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+
+        // alice는 혼자라 즉시 HELD
+        lm.setPeers(java.util.Collections.emptyList());
+        lm.requestLock(6);
+        assertTrue(lm.holds(6));
+
+        // 이제 peer 추가 + bob의 LOCK_REQUEST 수신
+        lm.setPeers(Arrays.asList("bob"));
+        lm.onLockRequest("bob", 5, 1L);
+        assertEquals("bob", lm.getRemoteHolder(5));
+
+        int releasesBefore = sender.countOfType(MessageType.LOCK_RELEASE);
+        lm.shiftRegions(5, -1);
+
+        // 결과: alice의 lock은 release, bob의 원격 표시는 유지
+        assertFalse(lm.holds(5), "shifted 쪽(alice)이 release");
+        assertFalse(lm.holds(6), "원래 key 6은 사라짐");
+        assertEquals("bob", lm.getRemoteHolder(5), "bob의 원격 표시 유지");
+        assertEquals(releasesBefore + 1, sender.countOfType(MessageType.LOCK_RELEASE),
+                "shifted 쪽이 LOCK_RELEASE broadcast");
+    }
+
+    @Test
+    void shiftCollisionNonShiftedSideKeeps() {
+        // 위와 정반대 시점 — 내(alice)가 안 shift된 쪽인 경우.
+        // alice는 region 5 HELD. 원격 bob은 region 6 HELD.
+        // 줄 5에서 1줄 삭제 → alice의 5 → 5 (안 shift), bob의 6 → 5 (shifted).
+        // 충돌 — alice는 유지, bob의 원격 표시만 정리.
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+
+        lm.setPeers(java.util.Collections.emptyList());
+        lm.requestLock(5);
+        assertTrue(lm.holds(5));
+
+        lm.setPeers(Arrays.asList("bob"));
+        lm.onLockRequest("bob", 6, 1L);
+        assertEquals("bob", lm.getRemoteHolder(6));
+
+        int releasesBefore = sender.countOfType(MessageType.LOCK_RELEASE);
+        lm.shiftRegions(5, -1);
+
+        assertTrue(lm.holds(5), "non-shifted 쪽(alice)은 lock 유지");
+        assertNull(lm.getRemoteHolder(5), "원격 표시(6→5 shifted)는 정리");
+        assertEquals(releasesBefore, sender.countOfType(MessageType.LOCK_RELEASE),
+                "release 안 함");
+    }
+
+    @Test
+    void replyAfterRegionShiftStillMatches() {
+        // 회귀: LOCK_REQUEST 보낸 뒤 줄 추가로 regionId가 shift됐을 때, peer는 원래 regionId로
+        // reply를 보낸다. ts 기반 매칭이 없으면 reply가 drop되어 timeout까지 대기하게 된다.
+        TestSender sender = new TestSender();
+        TestListener listener = new TestListener();
+        LockManager lm = new LockManager("alice", sender, listener);
+        lm.setPeers(Arrays.asList("bob"));
+
+        lm.requestLock(5);
+        long reqTs = sender.lastOfType(MessageType.LOCK_REQUEST)
+                .getPayloadAs(LockRequest.class).getTimestamp();
+        assertFalse(lm.holds(5));
+
+        // 누군가 줄 2에 1줄 삽입해서 내 region 5 → 6
+        lm.shiftRegions(2, 1);
+        assertFalse(lm.holds(5));
+        assertEquals(LockManager.State.REQUESTED, lm.getState(6));
+
+        // bob의 reply는 원래 regionId=5로 도착 — ts 매칭으로 처리되어야 함
+        lm.onLockReply("bob", 5, reqTs, "alice");
+        assertTrue(lm.holds(6), "shift된 새 regionId로 grant되어야 함");
+        assertEquals(List.of(6), listener.acquired);
+    }
+
+    @Test
+    void shiftSkipsNotInterestedRecords() {
+        // onLockRequest는 computeIfAbsent로 NOT_INTERESTED 레코드를 만든다.
+        // shiftRegions가 이걸 옮기지 않고 정리해야 충돌 판정이 정확하다.
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.setPeers(Arrays.asList("bob"));
+
+        lm.onLockRequest("bob", 8, 1L); // alice의 regions[8] = NOT_INTERESTED 잔여
+        assertEquals(LockManager.State.NOT_INTERESTED, lm.getState(8));
+
+        lm.shiftRegions(2, 1);
+
+        // regions[8]의 NOT_INTERESTED는 옮기지 않고 버려져야 한다 (state 그대로 NOT_INTERESTED)
+        assertEquals(LockManager.State.NOT_INTERESTED, lm.getState(9), "9는 빈 상태");
+        // 원격 holder만 정상 shift
+        assertEquals("bob", lm.getRemoteHolder(9));
+    }
+
+    @Test
+    void shiftRegionsWithDeleteRemovesNegativeKeys() {
+        TestSender sender = new TestSender();
+        LockManager lm = new LockManager("alice", sender, new TestListener());
+        lm.setPeers(Arrays.asList("bob"));
+
+        lm.onLockRequest("bob", 2, 1L);
+        lm.onLockRequest("bob", 5, 2L);
+
+        // 줄 0에서 3줄 제거 → 2→-1(제거), 5→2
+        lm.shiftRegions(0, -3);
+        assertNull(lm.getRemoteHolder(5), "원래 키는 사라짐");
+        assertEquals("bob", lm.getRemoteHolder(2), "5→2로 이동, 원래 2의 holder는 음수 키로 사라짐");
+    }
+
     @Test
     void releaseDuringRequestedSendsDeferredReplies() {
         TestSender sender = new TestSender();
